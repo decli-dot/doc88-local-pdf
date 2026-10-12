@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Doc88 PDF · локальное приложение</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <a href="/" class="brand"
+          ><img src="/icon.svg" alt="" width="34" height="34" />Doc88 <span>PDF</span></a
+        >
+        <div class="top-actions">
+          <span class="local-badge"><i></i> На твоём компьютере</span
+          ><button id="shutdown" class="quiet" type="button">Закрыть приложение</button>
+        </div>
+      </header>
+      <main>
+        <section class="intro">
+          <div class="eyebrow">ДОКУМЕНТЫ, С КОТОРЫМИ МОЖНО РАБОТАТЬ</div>
+          <h1>Из Doc88 — в PDF с поиском</h1>
+          <p>
+            Вставь ссылку. Получи документ, в котором можно<br class="wide-only" />
+            искать, выделять и копировать английский текст.
+          </p>
+        </section>
+        <div class="workspace">
+          <section class="card input-card" aria-labelledby="input-title">
+            <div class="card-heading">
+              <span class="section-number">01</span>
+              <h2 id="input-title">Добавь документ</h2>
+            </div>
+            <div class="tabs" role="tablist" aria-label="Источник документа">
+              <button
+                id="url-tab"
+                role="tab"
+                aria-selected="true"
+                aria-controls="url-panel"
+                type="button"
+              >
+                По ссылке
+              </button>
+              <button
+                id="zip-tab"
+                role="tab"
+                aria-selected="false"
+                aria-controls="zip-panel"
+                tabindex="-1"
+                type="button"
+              >
+                Готовый ZIP
+              </button>
+            </div>
+            <form id="url-panel" role="tabpanel" aria-labelledby="url-tab">
+              <label for="document-url">Ссылка на документ Doc88</label>
+              <input
+                id="document-url"
+                name="url"
+                type="url"
+                placeholder="https://www.doc88.com/p-…html"
+                autocomplete="off"
+                required
+              />
+              <div class="range-row">
+                <div>
+                  <label for="from-page">С первой страницы</label
+                  ><input id="from-page" type="number" min="1" step="1" value="1" />
+                </div>
+                <span class="range-dash">—</span>
+                <div>
+                  <label for="to-page">До страницы</label
+                  ><input
+                    id="to-page"
+                    type="number"
+                    min="1"
+                    step="1"
+                    placeholder="До конца документа"
+                  />
+                </div>
+              </div>
+              <div class="helper">Для первой пробы укажи «до страницы 2».</div>
+              <button id="start-url" class="primary" type="submit">
+                Создать OCR PDF <span aria-hidden="true">↗</span>
+              </button>
+            </form>
+            <form id="zip-panel" role="tabpanel" aria-labelledby="zip-tab" hidden>
+              <label class="dropzone" id="dropzone" for="archive-file"
+                ><span class="upload-icon" aria-hidden="true">↑</span
+                ><strong id="file-label">Выбери архив с изображениями</strong
+                ><span>или перетащи ZIP сюда · до 250 МБ</span
+                ><input id="archive-file" type="file" accept=".zip,application/zip"
+              /></label>
+              <div class="helper">
+                Подойдёт архив от оригинального doc88-downloader. Страницы будут отсортированы по
+                номерам файлов.
+              </div>
+              <button id="start-zip" class="primary" type="submit">
+                Распознать и создать PDF <span aria-hidden="true">↗</span>
+              </button>
+            </form>
+            <p id="form-error" class="error-text" role="alert" hidden></p>
+            <div class="input-footer">
+              <span>Язык OCR</span><strong>English</strong><span class="footer-dot">·</span
+              ><span id="engine-status">Проверяем готовность…</span>
+            </div>
+          </section>
+          <section class="card status-card" aria-labelledby="status-title">
+            <div class="card-heading">
+              <span class="section-number">02</span>
+              <h2 id="status-title">Твой PDF</h2>
+              <span id="status-pill" class="status-pill">Ожидание</span>
+            </div>
+            <div id="empty-state" class="empty-state">
+              <div class="document-art" aria-hidden="true">
+                <span></span><span></span><span></span><b>PDF</b><i>⌕</i>
+              </div>
+              <h3>Здесь появится результат</h3>
+              <p>Вид страниц сохранится.<br />Распознанный текст станет доступен для поиска.</p>
+            </div>
+            <div id="job-state" hidden>
+              <h3 id="job-title"></h3>
+              <div class="steps" aria-label="Этапы обработки">
+                <div data-step="download"><span>1</span>Архив страниц</div>
+                <div data-step="ocr"><span>2</span>Распознавание</div>
+                <div data-step="done"><span>3</span>Готовый PDF</div>
+              </div>
+              <p id="job-message" role="status" aria-live="polite"></p>
+              <div
+                id="progress"
+                class="progress"
+                role="progressbar"
+                aria-label="Обработка документа"
+                aria-valuemin="0"
+                aria-valuemax="100"
+              >
+                <div id="progress-fill"></div>
+              </div>
+              <div id="job-meta" class="job-meta"></div>
+              <div id="manual-note" class="manual-note" hidden>
+                <strong>Нужно твоё действие</strong
+                ><span
+                  >Переключись в открытое окно с Doc88 и выполни подтверждение на странице.
+                  Обработка продолжится сама.</span
+                >
+              </div>
+              <div id="result-actions" class="result-actions" hidden>
+                <a id="pdf-download" class="primary" href="#"
+                  >Скачать OCR PDF <span aria-hidden="true">↓</span></a
+                ><a id="pdf-preview" class="text-link" href="#" target="_blank" rel="noopener"
+                  >Открыть PDF ↗</a
+                >
+              </div>
+              <a id="zip-download" class="text-link archive-link" href="#" hidden
+                >Скачать исходный ZIP</a
+              >
+              <button id="cancel" class="secondary" type="button" hidden>
+                Остановить обработку
+              </button>
+              <p id="blank-note" class="helper" hidden></p>
+            </div>
+          </section>
+        </div>
+        <section id="history-section" class="history" hidden>
+          <div class="history-heading">
+            <h2>Последние документы</h2>
+            <span>Результаты сохраняются между запусками</span>
+          </div>
+          <div id="history-list"></div>
+        </section>
+        <div class="how-it-works">
+          <div>
+            <span>↗</span>
+            <p>
+              <strong>Отдельное окно Doc88</strong>Если сайт попросит капчу, реши её в открывшемся
+              окне.
+            </p>
+          </div>
+          <div>
+            <span>⌕</span>
+            <p><strong>Распознавание на компьютере</strong>Изображения обрабатываются локально.</p>
+          </div>
+          <div>
+            <span>↓</span>
+            <p>
+              <strong>PDF и оригинальный архив</strong>Оба файла можно сохранить после обработки.
+            </p>
+          </div>
+        </div>
+      </main>
+      <footer>Doc88 PDF <span>·</span> Локальная мастерская документов</footer>
+    </div>
+  </body>
+</html>

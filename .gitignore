@@ -1,0 +1,16 @@
+.data/
+node_modules/
+*.log
+qa/
+release/
+coverage/
+tmp/
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+*.pdf
+*.zip
+*.traineddata
+*.traineddata.gz

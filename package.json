@@ -1,0 +1,43 @@
+{
+  "name": "doc88-local-pdf",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Local Doc88 image archive downloader and searchable PDF converter",
+  "license": "MIT",
+  "author": "decli-dot",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/decli-dot/doc88-local-pdf.git"
+  },
+  "bugs": {
+    "url": "https://github.com/decli-dot/doc88-local-pdf/issues"
+  },
+  "keywords": [
+    "doc88",
+    "ocr",
+    "pdf",
+    "tesseract",
+    "local-app"
+  ],
+  "scripts": {
+    "start": "node server.cjs",
+    "open": "node launcher.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "node scripts/check.cjs",
+    "package": "node scripts/package.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "jszip": "3.10.2",
+    "pdf-lib": "1.17.1",
+    "playwright": "1.64.0",
+    "tesseract.js": "7.0.0"
+  },
+  "devDependencies": {
+    "prettier": "3.9.10"
+  }
+}

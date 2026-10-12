@@ -1,0 +1,9 @@
+.data/
+node_modules/
+qa/
+release/
+vendor/
+package-lock.json
+tests/fixtures/
+*.cmd
+LICENSE
