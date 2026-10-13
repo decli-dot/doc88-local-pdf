@@ -1,0 +1,44 @@
+name: Doc88 cloud preflight
+on:
+  workflow_dispatch:
+    inputs:
+      document_url:
+        description: Public Doc88 document URL (included in the metadata report)
+        required: true
+        type: string
+        default: https://www.doc88.com/p-2592543989165.html
+      expected_pages:
+        description: Expected total number of pages
+        required: true
+        type: string
+        default: '14'
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      DOC88_OCR_ENGINE: wasm
+      DOC88_CHECK_URL: ${{ inputs.document_url }}
+      DOC88_CHECK_PAGES: ${{ inputs.expected_pages }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Download and OCR in the cloud
+        run: node scripts/check-cloud.cjs
+      - name: Save metadata report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doc88-cloud-report
+          path: .data/cloud-report.json
+          if-no-files-found: warn
+          retention-days: 7

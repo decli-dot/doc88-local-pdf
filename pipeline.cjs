@@ -77,24 +77,40 @@ function cleanName(value) {
   );
 }
 
-async function downloadArchive(job, dataDir) {
+async function downloadArchive(job, dataDir, options = {}) {
   checkAbort(job);
   const { chromium } = dependency('playwright');
-  job.update({ stage: 'opening', message: 'Открываем документ в отдельном окне браузера…' });
+  job.update({
+    stage: 'opening',
+    message: options.headless
+      ? 'Открываем документ в облачном браузере…'
+      : 'Открываем документ в отдельном окне браузера…',
+  });
   const context = await chromium.launchPersistentContext(path.join(dataDir, 'browser-profile'), {
-    channel: browserChannel(),
-    headless: false,
+    channel: options.channel || browserChannel(),
+    headless: Boolean(options.headless),
     acceptDownloads: true,
-    viewport: null,
+    viewport: options.viewport || null,
+    ...(options.deviceScaleFactor ? { deviceScaleFactor: options.deviceScaleFactor } : {}),
   });
   job.browser = context;
   const closeOnAbort = () => context.close().catch(() => {});
   job.controller.signal.addEventListener('abort', closeOnAbort, { once: true });
+  let challengeError = null;
   try {
     checkAbort(job);
     const page = context.pages()[0] || (await context.newPage());
     page.setDefaultTimeout(15 * 60 * 1000);
     page.on('dialog', async (dialog) => {
+      if (options.rejectChallenges) {
+        challengeError = new Error(
+          'Doc88 запросил капчу или ручное подтверждение чтения. Автоматическая облачная загрузка остановлена.',
+        );
+        job.update({ stage: 'challenge', message: challengeError.message });
+        await dialog.dismiss().catch(() => {});
+        await context.close().catch(() => {});
+        return;
+      }
       job.update({
         stage: 'waiting',
         message: 'Doc88 просит подтверждение. Реши капчу или подтверди чтение в открытом окне.',
@@ -115,7 +131,9 @@ async function downloadArchive(job, dataDir) {
         job.update({ stage: 'downloading', message: `Загружаем страницу ${preload[1]}…` });
       }
     });
-    await page.goto(job.url, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    const response = await page.goto(job.url, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    if (options.rejectChallenges && response && response.status() >= 400)
+      throw new Error(`Doc88 вернул HTTP ${response.status()}.`);
     if (!['doc88.com', 'www.doc88.com'].includes(new URL(page.url()).hostname))
       throw new Error('Doc88 перенаправил на другую страницу.');
     await page.waitForSelector('#pageNumInput', { state: 'attached', timeout: 90000 });
@@ -194,6 +212,8 @@ async function downloadArchive(job, dataDir) {
       running = false;
       clearTimeout(watchdog);
     }
+  } catch (error) {
+    throw challengeError || error;
   } finally {
     job.controller.signal.removeEventListener('abort', closeOnAbort);
     await context.close().catch(() => {});
