@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Вставь ссылку на Doc88 и получи PDF с поиском английского текста. Без установки программ и расширений."
+    />
+    <title>Doc88 → OCR PDF</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <a class="brand" href="/"><img src="/icon.svg" alt="" /> Doc88 PDF</a
+      ><a href="https://github.com/decli-dot/doc88-local-pdf" target="_blank" rel="noopener"
+        >GitHub ↗</a
+      >
+    </header>
+    <main>
+      <div class="eyebrow">БЕЗ УСТАНОВКИ ПРОГРАММ И РАСШИРЕНИЙ</div>
+      <h1>Вставь ссылку.<br /><span>Получи PDF с поиском.</span></h1>
+      <p class="intro">
+        Заберём страницы Doc88, распознаем английский текст и соберём документ. Готовый PDF
+        скачивается автоматически.
+      </p>
+      <section class="card" aria-label="Получить PDF">
+        <div class="card-top">
+          <span class="tag">ENGLISH OCR</span
+          ><span class="connection" id="connection">Подключаемся…</span>
+        </div>
+        <form id="url-form">
+          <label for="url">Ссылка на документ</label>
+          <div class="input-row">
+            <input
+              id="url"
+              type="url"
+              placeholder="https://www.doc88.com/p-…html"
+              required
+              autocomplete="url"
+            /><button id="start" type="submit">Получить PDF →</button>
+          </div>
+          <details>
+            <summary>Выбрать страницы</summary>
+            <div class="input-row">
+              <div>
+                <label for="from">С страницы</label
+                ><input id="from" type="number" min="1" value="1" />
+              </div>
+              <div>
+                <label for="to">По страницу</label
+                ><input id="to" type="number" min="1" placeholder="До конца" />
+              </div>
+            </div>
+          </details>
+          <p class="hint" id="limit">
+            Бесплатный сервер обрабатывает документ целиком или выбранный диапазон.
+          </p>
+        </form>
+        <div id="task" hidden>
+          <div class="task-heading">
+            <h2 id="task-title">Готовим документ</h2>
+            <button class="text-button" id="cancel" type="button">Остановить</button>
+          </div>
+          <p id="message" role="status" aria-live="polite"></p>
+          <progress id="progress" max="100" value="0" aria-label="Обработка документа"></progress>
+          <div id="results" hidden>
+            <a class="button" id="pdf-link" download>Скачать PDF ↓</a
+            ><a class="text-button" id="zip-link" download>Архив изображений</a>
+            <p id="stats" class="hint"></p>
+            <p class="hint">Результат доступен 15 минут. Сохрани его на устройство.</p>
+          </div>
+          <button class="text-button" id="reset" type="button" hidden>Другой документ</button>
+        </div>
+        <div id="error" role="alert" hidden></div>
+      </section>
+      <div class="notes">
+        <p><span aria-hidden="true">↗</span> Ссылка → OCR → один PDF.</p>
+        <p>
+          <span aria-hidden="true">◎</span> Файлы обрабатываются на сервере и удаляются через 15
+          минут.
+        </p>
+      </div>
+    </main>
+    <footer>
+      Doc88 PDF <span>·</span> Бесплатно <span>·</span> После простоя открытие сайта может занять
+      около минуты. Если Doc88 потребует капчу или вход, автоматическая обработка остановится.
+    </footer>
+  </body>
+</html>

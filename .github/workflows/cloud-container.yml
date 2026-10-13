@@ -1,0 +1,51 @@
+name: Cloud container
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      [
+        Dockerfile,
+        .dockerignore,
+        cloud-server.cjs,
+        pipeline.cjs,
+        runtime.cjs,
+        package-lock.json,
+        cloud/**,
+        scripts/check-cloud-server.cjs,
+        .github/workflows/cloud-container.yml,
+      ]
+permissions:
+  contents: read
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Build deployment image
+        run: docker build -t doc88-cloud .
+      - name: Start with free server limits
+        run: docker run -d --name doc88-cloud --memory=512m --memory-swap=512m --cpus=0.1 -p 127.0.0.1:18973:10000 -e DOC88_PUBLIC_ORIGIN=http://127.0.0.1:18973 doc88-cloud
+      - name: Download and recognize all 14 pages through HTTP
+        run: node scripts/check-cloud-server.cjs
+      - name: Container diagnostics
+        if: always()
+        run: |
+          docker inspect --format '{{json .State}}' doc88-cloud
+          docker logs doc88-cloud
+          docker stats --no-stream doc88-cloud
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: doc88-cloud-server-report
+          path: .data/cloud-server-report.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -127,7 +127,8 @@ label {
   display: flex;
   gap: 10px;
 }
-input[type='url'] {
+input[type='url'],
+input[type='number'] {
   min-width: 0;
   flex: 1;
   width: 100%;

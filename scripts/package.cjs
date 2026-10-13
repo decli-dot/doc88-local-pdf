@@ -11,6 +11,10 @@ const files = [
   'runtime.cjs',
   'pipeline.cjs',
   'server.cjs',
+  'cloud-server.cjs',
+  'Dockerfile',
+  '.dockerignore',
+  'render.yaml',
   'package.json',
   'package-lock.json',
   'README.md',
@@ -29,7 +33,7 @@ async function addDirectory(zip, relative) {
 (async () => {
   const zip = new JSZip();
   for (const file of files) zip.file(file, await fs.readFile(path.join(root, file)));
-  for (const directory of ['dist', 'vendor', 'scripts', 'tests', 'web', 'extension'])
+  for (const directory of ['dist', 'vendor', 'scripts', 'tests', 'web', 'extension', 'cloud'])
     await addDirectory(zip, directory);
   const output = path.join(root, 'release');
   await fs.mkdir(output, { recursive: true });

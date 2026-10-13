@@ -1,0 +1,16 @@
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!cloud-server.cjs
+!pipeline.cjs
+!runtime.cjs
+!LICENSE
+!cloud/
+!cloud/**
+!web/
+!web/style.css
+!dist/
+!dist/icon.svg
+!vendor/
+!vendor/**

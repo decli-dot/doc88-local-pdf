@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: doc88-pdf
+    runtime: docker
+    repo: https://github.com/decli-dot/doc88-local-pdf
+    branch: main
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: DOC88_CLOUD_MAX_PAGES
+        value: '40'

@@ -21,6 +21,7 @@
   ],
   "scripts": {
     "start": "node server.cjs",
+    "start:cloud": "node cloud-server.cjs",
     "open": "node launcher.cjs",
     "test": "node --test tests/*.test.cjs",
     "format": "prettier --write .",

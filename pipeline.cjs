@@ -165,8 +165,9 @@ async function downloadArchive(job, dataDir, options = {}) {
     if (job.fromPage > end || end > info.count)
       throw new Error(`В документе ${info.count} страниц. Проверь диапазон.`);
     const total = end - job.fromPage + 1;
-    if (total > MAX_PAGES)
-      throw new Error(`За один раз можно обработать до ${MAX_PAGES} страниц. Укажи диапазон.`);
+    const limit = options.maxPages || MAX_PAGES;
+    if (total > limit)
+      throw new Error(`За один раз можно обработать до ${limit} страниц. Укажи диапазон.`);
     job.update({
       title: info.title,
       total,
