@@ -29,7 +29,7 @@ async function addDirectory(zip, relative) {
 (async () => {
   const zip = new JSZip();
   for (const file of files) zip.file(file, await fs.readFile(path.join(root, file)));
-  for (const directory of ['dist', 'vendor', 'scripts', 'tests'])
+  for (const directory of ['dist', 'vendor', 'scripts', 'tests', 'web', 'extension'])
     await addDirectory(zip, directory);
   const output = path.join(root, 'release');
   await fs.mkdir(output, { recursive: true });

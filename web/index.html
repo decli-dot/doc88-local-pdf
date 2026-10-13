@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Одна кнопка на Doc88 — PDF с поиском. Бесплатное распознавание английского текста прямо в браузере."
+    />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; img-src 'self' blob: data:; connect-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'"
+    />
+    <title>Doc88 → OCR PDF</title>
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+    <script defer src="assets/jszip.min.js"></script>
+    <script defer src="assets/pdf-lib.min.js"></script>
+    <script defer src="assets/tesseract.min.js"></script>
+    <script defer src="ocr.js"></script>
+    <script defer src="app.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <a class="brand" href="./"><img src="icon.svg" alt="" /> Doc88 PDF</a
+      ><a href="https://github.com/decli-dot/doc88-local-pdf" target="_blank" rel="noopener"
+        >GitHub ↗</a
+      >
+    </header>
+    <main>
+      <div class="eyebrow">РАБОТАЕТ В ТВОЁМ БРАУЗЕРЕ</div>
+      <h1>Документ в один клик.<br /><span>Текст — под рукой.</span></h1>
+      <p class="intro">Сохрани страницы Doc88 в PDF с поиском и копированием английского текста.</p>
+      <section class="card" id="workspace" aria-label="Получить PDF">
+        <div class="card-top">
+          <span class="tag">ENGLISH OCR</span
+          ><span id="connection" class="connection">Проверяем расширение…</span>
+        </div>
+        <form id="url-form">
+          <label for="url">Ссылка на документ</label>
+          <div class="input-row">
+            <input
+              id="url"
+              type="url"
+              placeholder="https://www.doc88.com/p-…html"
+              required
+              autocomplete="url"
+            /><button id="start" type="submit">
+              Получить PDF <span aria-hidden="true">→</span>
+            </button>
+          </div>
+          <p class="hint" id="start-hint">Или нажми «Скачать OCR PDF» прямо на странице Doc88.</p>
+        </form>
+        <div id="task" hidden>
+          <div class="task-heading">
+            <h2 id="task-title">Готовим документ</h2>
+            <button class="text-button" id="cancel" type="button">Остановить</button>
+          </div>
+          <p id="message" role="status" aria-live="polite"></p>
+          <progress id="progress" max="100" value="0" aria-label="Обработка документа"></progress>
+          <div id="results" hidden>
+            <a class="button" id="pdf-link" download>Скачать PDF ↓</a
+            ><button class="text-button" id="zip-link" type="button">Архив изображений</button>
+            <p id="stats" class="hint"></p>
+          </div>
+          <button class="text-button" id="reset" type="button" hidden>Другой документ</button>
+        </div>
+        <div id="error" role="alert" hidden></div>
+      </section>
+      <section id="setup" class="setup" hidden>
+        <div>
+          <span class="step-number">ОДИН РАЗ</span>
+          <h2>Добавь кнопку на Doc88</h2>
+          <p>
+            Расширение передаёт страницы в эту вкладку автоматически. Устанавливается в Chrome или
+            Edge; отдельная программа не нужна.
+          </p>
+        </div>
+        <ol>
+          <li>
+            <a class="download-extension" href="doc88-browser-extension.zip" download
+              >Скачай расширение ↓</a
+            >
+            и распакуй ZIP в постоянную папку.
+          </li>
+          <li>
+            Открой
+            <button class="copy-address" id="extensions-address" type="button">
+              chrome://extensions
+            </button>
+            и включи <strong>«Режим разработчика»</strong>.
+          </li>
+          <li>
+            Нажми <strong>«Загрузить распакованное расширение»</strong> и выбери папку с
+            <code>manifest.json</code>. Затем обнови эту страницу и вкладку Doc88.
+          </li>
+        </ol>
+      </section>
+      <details id="archive-option">
+        <summary>Уже есть ZIP со страницами?</summary>
+        <p>Выбери архив — распознаем его здесь без расширения.</p>
+        <label class="file-button" for="archive">Выбрать ZIP</label
+        ><input id="archive" type="file" accept=".zip,application/zip" />
+        <p class="hint">До 500 страниц и 250 МБ. Изображения JPG и PNG.</p>
+      </details>
+      <div class="notes">
+        <p><span aria-hidden="true">↗</span> Только браузер. Без Node.js и запуска сервера.</p>
+        <p><span aria-hidden="true">◎</span> Изображения и PDF остаются на твоём устройстве.</p>
+      </div>
+    </main>
+    <footer>
+      Doc88 PDF <span>·</span> Бесплатно <span>·</span> Если Doc88 попросит капчу, реши её во
+      вкладке документа.
+    </footer>
+  </body>
+</html>

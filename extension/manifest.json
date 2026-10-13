@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Doc88 → OCR PDF",
+  "version": "1.2.0",
+  "homepage_url": "https://decli-dot.github.io/doc88-local-pdf/",
+  "description": "Одна кнопка на Doc88: получить PDF с поиском. OCR работает в вашем браузере.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://www.doc88.com/*",
+    "https://doc88.com/*",
+    "https://decli-dot.github.io/doc88-local-pdf/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Doc88 → OCR PDF" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.doc88.com/p-*.html", "https://doc88.com/p-*.html"],
+      "js": ["doc88.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://decli-dot.github.io/doc88-local-pdf/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

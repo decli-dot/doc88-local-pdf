@@ -3,11 +3,11 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const files = ['runtime.cjs', 'server.cjs', 'pipeline.cjs', 'launcher.cjs', 'dist/app.js'];
-for (const directory of ['scripts', 'tests']) {
+for (const directory of ['scripts', 'tests', 'extension', 'web']) {
   files.push(
     ...fs
       .readdirSync(path.join(root, directory))
-      .filter((name) => name.endsWith('.cjs'))
+      .filter((name) => /\.(?:cjs|js)$/.test(name))
       .map((name) => directory + '/' + name),
   );
 }

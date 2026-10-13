@@ -1,6 +1,6 @@
 {
   "name": "doc88-local-pdf",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "Local Doc88 image archive downloader and searchable PDF converter",
   "license": "MIT",
@@ -26,7 +26,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "node scripts/check.cjs",
-    "package": "node scripts/package.cjs"
+    "package": "node scripts/package.cjs",
+    "build:web": "node scripts/build-web.cjs",
+    "preview:web": "node scripts/preview-web.cjs",
+    "test:extension": "node scripts/test-extension.cjs"
   },
   "engines": {
     "node": ">=22"

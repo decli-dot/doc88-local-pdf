@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0
+
+- Free browser converter on GitHub Pages, with same-origin OCR assets and an English model pinned by SHA-256.
+- Chrome/Edge extension adds an OCR PDF button directly to Doc88; page images transfer automatically without downloading and uploading a ZIP.
+- Browser OCR creates a searchable PDF and starts its download; the original page images can also be saved in ZIP.
+- Cancellation, progress, manual CAPTCHA handling, ordered page checks, and bounded browser memory use.
+- Existing local application remains available for page ranges, history, and larger documents.
+
 ## 1.1.0
 
 - Standalone Node.js installation with a lockfile, Windows setup and launch shortcuts.
