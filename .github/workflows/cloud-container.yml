@@ -33,8 +33,11 @@ jobs:
       - name: Build deployment image
         run: docker build -t doc88-cloud .
       - name: Start with free server limits
-        run: docker run -d --name doc88-cloud --memory=512m --memory-swap=512m --cpus=0.1 -p 127.0.0.1:18973:10000 -e DOC88_PUBLIC_ORIGIN=http://127.0.0.1:18973 doc88-cloud
+        run: docker run -d --name doc88-cloud --memory=512m --memory-swap=512m --cpus=0.1 -p 127.0.0.1:18973:10000 -e DOC88_PUBLIC_ORIGIN=http://127.0.0.1:18973 -v "$PWD/tests/fixtures:/fixture:ro" -v "$PWD/scripts/check-container-ocr.cjs:/check.cjs:ro" doc88-cloud
+      - name: Recognize 14 synthetic pages under resource limits
+        run: docker exec doc88-cloud node /check.cjs
       - name: Download and recognize all 14 pages through HTTP
+        if: github.event_name == 'workflow_dispatch'
         run: node scripts/check-cloud-server.cjs
       - name: Container diagnostics
         if: always()
