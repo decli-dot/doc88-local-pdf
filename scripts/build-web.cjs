@@ -16,10 +16,85 @@ async function copy(source, destination) {
   await fs.copyFile(path.join(root, source), target);
 }
 (async () => {
-  // This directory contains generated public assets only; never copy .data.
+  // Rebuild only this verified generated directory; user data and model caches stay outside it.
+  if (path.dirname(output) !== root || path.basename(output) !== '.web-build')
+    throw Error('Invalid build output directory.');
+  await fs.rm(output, { recursive: true, force: true });
   await fs.mkdir(output, { recursive: true });
-  for (const name of ['index.html', 'app.js', 'ocr.js', 'style.css'])
-    await copy('web/' + name, name);
+  await copy('web/ocr.js', 'ocr.js');
+  for (const name of ['app.js', 'query.js', 'challenge.js', 'style.css'])
+    await copy('dist/' + name, name);
+  const esbuild = require('esbuild');
+  const aliases = {
+    'node:fs/promises': 'web/store.js',
+    'node:fs': 'web/browser-fs.js',
+    'node:path': 'web/browser-path.js',
+    'node:crypto': 'web/browser-crypto.js',
+  };
+  const browserBundle = await esbuild.build({
+    entryPoints: [path.join(root, 'web/workspace.js')],
+    outfile: path.join(output, 'workspace.js'),
+    bundle: true,
+    platform: 'browser',
+    format: 'iife',
+    target: ['chrome120'],
+    minify: true,
+    inject: [path.join(root, 'web/browser-buffer.js')],
+    metafile: true,
+    plugins: [
+      {
+        name: 'browser-adapters',
+        setup(build) {
+          build.onResolve({ filter: /^node:/ }, (args) => ({
+            path: path.join(
+              root,
+              aliases[args.path] ||
+                (() => {
+                  throw Error('No browser adapter for ' + args.path);
+                })(),
+            ),
+          }));
+          build.onResolve({ filter: /(?:^|\/)runtime\.cjs$/ }, () => ({
+            path: path.join(root, 'web/browser-runtime.js'),
+          }));
+          build.onResolve({ filter: /(?:^|\/)pipeline\.cjs$/ }, () => ({
+            path: path.join(root, 'web/pipeline.js'),
+          }));
+        },
+      },
+    ],
+  });
+  let html = await fs.readFile(path.join(root, 'dist/index.html'), 'utf8');
+  html = html
+    .replace(/(src|href)="\//g, '$1="')
+    .replace(
+      '<title>Doc88 PDF · локальное приложение</title>',
+      '<title>Doc88 PDF · поиск ISO и OCR в браузере</title>',
+    )
+    .replace(
+      '<script defer src="challenge.js"></script>',
+      '<script defer src="assets/jszip.min.js"></script><script defer src="assets/pdf-lib.min.js"></script><script defer src="assets/tesseract.min.js"></script><script defer src="ocr.js"></script><script defer src="workspace.js"></script><script defer src="challenge.js"></script>',
+    )
+    .replace(
+      '</head>',
+      "<link rel=\"stylesheet\" href=\"workspace.css\"><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; img-src 'self' blob: data:; connect-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'\">\n</head>",
+    )
+    .replace(
+      '<div class="workspace">',
+      (await fs.readFile(path.join(root, 'web/setup.html'), 'utf8')) + '<div class="workspace">',
+    )
+    .replace('На твоём компьютере', 'В твоём браузере')
+    .replace('Закрыть приложение', 'Остановить работу')
+    .replace('локальное приложение', 'браузерная программа')
+    .replace('Распознавание на компьютере', 'Распознавание в браузере')
+    .replace(
+      'Локальная мастерская документов',
+      'Поиск ISO и OCR в браузере · История хранится в этом браузере. Очистка данных сайта удалит её.',
+    );
+  const version = require('../package.json').version;
+  html = html.replace(/(src|href)="([^"?]+\.(?:js|css))"/g, `$1="$2?v=${version}"`);
+  await fs.writeFile(path.join(output, 'index.html'), html);
+  await copy('web/workspace.css', 'workspace.css');
   await copy('dist/icon.svg', 'icon.svg');
   await copy('node_modules/jszip/dist/jszip.min.js', 'assets/jszip.min.js');
   await copy('node_modules/pdf-lib/dist/pdf-lib.min.js', 'assets/pdf-lib.min.js');
@@ -36,11 +111,37 @@ async function copy(source, destination) {
         `assets/core/${core}.${extension}`,
       );
   }
-  for (const dependency of ['jszip', 'pdf-lib', 'tesseract.js', 'tesseract.js-core']) {
+  const bundledPackages = Object.keys(browserBundle.metafile.inputs)
+    .map((file) => file.split('node_modules/').at(-1))
+    .filter(
+      (file) =>
+        file && !file.startsWith('web/') && !file.startsWith('dist/') && !file.endsWith('.cjs'),
+    )
+    .map((file) =>
+      file.startsWith('@') ? file.split('/').slice(0, 2).join('/') : file.split('/')[0],
+    );
+  for (const dependency of new Set([
+    'jszip',
+    'pdf-lib',
+    'tesseract.js',
+    'tesseract.js-core',
+    ...bundledPackages,
+  ])) {
     const directory = path.join(root, 'node_modules', dependency);
     const license = (await fs.readdir(directory)).find((name) => /^license(?:\.|$)/i.test(name));
+    if (
+      !license &&
+      dependency === 'franc-min' &&
+      require('../node_modules/franc-min/package.json').version === '6.2.0'
+    ) {
+      await copy('web/licenses/franc-min.txt', 'assets/licenses/franc-min.txt');
+      continue;
+    }
     if (!license) throw new Error('Dependency license missing: ' + dependency);
-    await copy(`node_modules/${dependency}/${license}`, `assets/licenses/${dependency}.txt`);
+    await copy(
+      `node_modules/${dependency}/${license}`,
+      `assets/licenses/${dependency.replaceAll('/', '-')}.txt`,
+    );
   }
   let model;
   const cache =

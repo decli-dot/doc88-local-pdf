@@ -54,7 +54,10 @@ let context, server, monitor;
     await fs.writeFile(path.join(extension, 'manifest.json'), JSON.stringify(manifest));
   }
   context = await chromium.launchPersistentContext(
-    path.join(output, publicSite ? 'public-profile' : 'local-profile'),
+    path.join(
+      output,
+      (publicSite ? 'public-profile-' : 'local-profile-') + require('node:crypto').randomUUID(),
+    ),
     {
       channel: 'chromium',
       headless: true,
@@ -83,27 +86,35 @@ let context, server, monitor;
   const worker =
     context.serviceWorkers()[0] ||
     (await context.waitForEvent('serviceworker', { timeout: 15000 }));
+  for (const tab of context.pages()) await tab.close();
   const page = await context.newPage();
   await page.goto(docURL, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForSelector('#doc88-pdf-extension', { state: 'attached', timeout: 15000 });
-  // Exercise the same entry point as the toolbar action, using the browser API.
-  const started = await worker.evaluate(async (url) => {
-    const [tab] = await chrome.tabs.query({ url });
-    if (!tab) throw new Error('Source tab not found');
-    return await startJob(url, tab.id, null);
-  }, docURL);
-  let resultPage;
-  for (let attempt = 0; attempt < 150; attempt++) {
-    resultPage = context.pages().find((page) => page.url().includes('#job=' + started.id));
-    if (resultPage) break;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  if (!realURL)
+    await worker.evaluate(() => {
+      // Reuse routed fixture tabs: Chromium-created tabs can navigate before Playwright attaches its routing.
+      const original = startJob;
+      startJob = async (url, source, target, options) => {
+        if (source == null) source = (await chrome.tabs.query({ url }))[0]?.id;
+        return original(url, source, target, options);
+      };
+    });
+  let resultPage = context.pages().find((page) => page.url().startsWith(site));
+  if (!resultPage) {
+    resultPage = await context.newPage();
+    await resultPage.goto(site);
   }
-  if (!resultPage) throw new Error('Converter tab not found');
+  await resultPage.waitForFunction(() =>
+    document.getElementById('browser-connection')?.textContent.includes('Расширение готово'),
+  );
+  await resultPage.locator('#url-tab').click();
+  await resultPage.locator('#document-url').fill(docURL);
+  await resultPage.locator('#start-url').click();
   resultPage.on('pageerror', (error) => console.error('Converter: ' + error.message));
   let previous = '';
   monitor = setInterval(async () => {
     try {
-      const state = await resultPage.locator('#message').textContent({ timeout: 500 });
+      const state = await resultPage.locator('#job-message').textContent({ timeout: 500 });
       if (state !== previous) {
         console.log(state);
         previous = state;
@@ -114,13 +125,16 @@ let context, server, monitor;
   downloadPromise.catch(() => {});
   await resultPage.waitForFunction(
     () => {
-      const error = document.getElementById('error');
+      const error = document.getElementById('form-error');
       if (error && !error.hidden) throw new Error(error.textContent);
-      return document.getElementById('results')?.hidden === false;
+      const status = document.getElementById('status-pill')?.textContent;
+      if (status === 'Ошибка') throw new Error(document.getElementById('job-message')?.textContent);
+      return document.getElementById('result-actions')?.hidden === false;
     },
     null,
     { timeout: realURL ? 8 * 60 * 1000 : 60000 },
   );
+  await resultPage.locator('#pdf-download').click();
   const download = await downloadPromise;
   const filename = path.join(output, realURL ? 'real-document.pdf' : 'fixture-document.pdf');
   await download.saveAs(filename);
@@ -131,8 +145,17 @@ let context, server, monitor;
     assert.ok(resources.get(PDFName.of('XObject')), 'page image missing');
     assert.ok(resources.get(PDFName.of('Font')), 'searchable text font missing');
   }
-  const stats = await resultPage.locator('#stats').textContent();
-  assert.match(stats, /знаков текста/);
+  const stats = await resultPage.locator('#job-meta').textContent();
+  assert.match(stats, /стр\./);
+  if (!realURL)
+    await require('./test-browser-features.cjs')({
+      context,
+      resultPage,
+      worker,
+      sourcePage: page,
+      docURL,
+      output,
+    });
   await resultPage.screenshot({
     path: path.join(output, realURL ? 'real-result.png' : 'fixture-result.png'),
     fullPage: true,

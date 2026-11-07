@@ -1,4 +1,5 @@
 'use strict';
+if (typeof importScripts === 'function') importScripts('services.js');
 const SITE = chrome.runtime.getManifest().homepage_url;
 const MAX_PAGES = 500;
 const MAX_BYTES = 250 * 1024 * 1024;
@@ -36,13 +37,16 @@ async function notify(tabId, message) {
 async function endJob(job, error) {
   if (!job || (await getJob())?.id !== job.id) return;
   await chrome.storage.session.remove('job');
+  if (typeof releaseChallenge === 'function') await releaseChallenge(job);
   await Promise.allSettled([
     notify(job.sourceTab, { type: 'STOP_CAPTURE', id: job.id, error }),
     notify(job.targetTab, { type: error ? 'ERROR' : 'CANCELLED', id: job.id, message: error }),
   ]);
+  if (job.protocol === 2 && job.createdSource)
+    await chrome.tabs.remove(job.sourceTab).catch(() => {});
 }
 let starting = false;
-async function startJob(url, sourceTab, targetTab) {
+async function startJob(url, sourceTab, targetTab, options = {}) {
   if (starting)
     throw new Error('Уже обрабатываем документ. Дождись результата или останови обработку.');
   starting = true;
@@ -58,11 +62,36 @@ async function startJob(url, sourceTab, targetTab) {
       createdTabs.push(tab.id);
     }
     if (sourceTab == null) {
-      const tab = await chrome.tabs.create({ url, active: true });
+      const tab = await chrome.tabs.create({ url, active: options.protocol !== 2 });
       sourceTab = tab.id;
       createdTabs.push(tab.id);
     }
-    await saveJob({ id, url, sourceTab, targetTab, phase: 'waiting', received: 0, bytes: 0 });
+    const fromPage = options.fromPage || 1,
+      toPage = options.toPage || null;
+    if (
+      !Number.isSafeInteger(fromPage) ||
+      fromPage < 1 ||
+      (toPage != null && (!Number.isSafeInteger(toPage) || toPage < fromPage)) ||
+      !Array.isArray(options.skip || []) ||
+      (options.skip || []).some(
+        (index) => !Number.isSafeInteger(index) || index < 0 || index >= MAX_PAGES,
+      )
+    )
+      throw Error('Некорректный диапазон или сохранённые страницы.');
+    await saveJob({
+      id,
+      url,
+      sourceTab,
+      targetTab,
+      phase: 'waiting',
+      received: 0,
+      bytes: 0,
+      protocol: options.protocol === 2 ? 2 : 1,
+      fromPage,
+      toPage,
+      skip: options.skip || [],
+      createdSource: createdTabs.includes(sourceTab),
+    });
     return { id };
   } catch (error) {
     // Only close tabs created by this unsuccessful request.
@@ -77,7 +106,13 @@ async function beginCapture(job) {
   while (Date.now() < deadline) {
     if ((await getJob())?.id !== job.id) return;
     try {
-      await notify(job.sourceTab, { type: 'CAPTURE', id: job.id });
+      await notify(job.sourceTab, {
+        type: 'CAPTURE',
+        id: job.id,
+        fromPage: job.fromPage,
+        toPage: job.toPage,
+        skip: job.skip,
+      });
       return;
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -91,14 +126,37 @@ async function handle(message, sender) {
   if (message.type === 'PING' && isSite(sender.url))
     return { version: chrome.runtime.getManifest().version };
   if (message.type === 'START_DOC88') {
-    return startJob(docURL(sender.url), sender.tab.id, null);
+    if (chrome.tabs.query) {
+      const existing = (await chrome.tabs.query({ url: SITE + '*' })).find(
+        (tab) => tab.id !== sender.tab.id,
+      );
+      if (existing) {
+        const imported = await notify(existing.id, {
+          type: 'IMPORT_URL',
+          id: crypto.randomUUID(),
+          index: -1,
+          url: docURL(sender.url),
+          ack: true,
+        });
+        if (imported?.error) throw Error(imported.error);
+        await chrome.tabs.update(existing.id, { active: true });
+        return { queued: true };
+      }
+    }
+    return startJob(docURL(sender.url), sender.tab.id, null, { protocol: 2 });
   }
   if (message.type === 'START_URL' && isSite(sender.url))
-    return startJob(message.url, null, sender.tab.id);
+    return startJob(message.url, null, sender.tab.id, message);
   const job = await getJob();
+  if (message.type === 'RESET_CAPTURE' && isSite(sender.url)) {
+    if (job?.targetTab === sender.tab.id) await endJob(job);
+    return { ok: true };
+  }
   if (!job || job.id !== message.id) throw new Error('Обработка уже завершена.');
   const target = sender.tab?.id === job.targetTab && isSite(sender.url);
   const source = sender.tab?.id === job.sourceTab && docURL(sender.url) === job.url;
+  if (message.type === 'GET_CAPTURE' && target)
+    return { url: job.url, fromPage: job.fromPage, toPage: job.toPage };
   if (message.type === 'READY' && target) {
     if (job.phase !== 'waiting')
       throw new Error('Страница обработки была перезагружена. Запусти документ заново.');
@@ -114,19 +172,35 @@ async function handle(message, sender) {
   if (message.type === 'FINISH' && target && job.phase === 'ocr') {
     await chrome.storage.session.remove('job');
     await notify(job.sourceTab, { type: 'STOP_CAPTURE', id: job.id }).catch(() => {});
+    if (typeof releaseChallenge === 'function') await releaseChallenge(job);
+    if (job.protocol === 2 && job.createdSource)
+      await chrome.tabs.remove(job.sourceTab).catch(() => {});
     return { ok: true };
   }
   if (!source || job.phase !== 'capturing')
     throw new Error('Запрос не относится к текущему документу.');
   if (message.type === 'CAPTURE_PROGRESS') {
+    job.challenge = Boolean(message.challenge);
+    await saveJob(job);
+    if (!job.challenge && typeof releaseChallenge === 'function') await releaseChallenge(job);
     await notify(job.targetTab, {
       type: 'PROGRESS',
       id: job.id,
       message: String(message.message).slice(0, 300),
+      challenge: job.challenge,
     });
   } else if (message.type === 'CAPTURE_META') {
     if (!Number.isSafeInteger(message.total) || message.total < 1 || message.total > MAX_PAGES)
       throw new Error(`За один раз можно обработать до ${MAX_PAGES} страниц.`);
+    if (
+      job.protocol === 2 &&
+      (!Number.isSafeInteger(message.documentTotal) ||
+        message.documentTotal < message.total ||
+        (job.toPage || message.documentTotal) - job.fromPage + 1 !== message.total ||
+        job.fromPage > message.documentTotal ||
+        (job.toPage && job.toPage > message.documentTotal))
+    )
+      throw Error('Doc88 вернул неверное число страниц диапазона.');
     job.total = message.total;
     await saveJob(job);
     await notify(job.targetTab, {
@@ -134,7 +208,25 @@ async function handle(message, sender) {
       id: job.id,
       total: job.total,
       title: String(message.title || 'document').slice(0, 100),
+      documentTotal: message.documentTotal || job.total,
     });
+  } else if (message.type === 'CAPTURE_CACHED') {
+    if (
+      job.protocol !== 2 ||
+      message.index !== job.received ||
+      !job.skip.includes(message.index) ||
+      job.received >= job.total
+    )
+      throw Error('Сохранённая страница не относится к заданию.');
+    const acknowledged = await notify(job.targetTab, {
+      type: 'CACHED',
+      id: job.id,
+      index: job.received,
+      ack: true,
+    });
+    if (acknowledged?.error) throw Error(acknowledged.error);
+    job.received++;
+    await saveJob(job);
   } else if (message.type === 'CAPTURE_PAGE') {
     const image = message.image;
     if (
@@ -151,7 +243,14 @@ async function handle(message, sender) {
       throw new Error(
         'Документ больше 250 МБ. Используй локальную программу для больших документов.',
       );
-    await notify(job.targetTab, { type: 'PAGE', id: job.id, index: job.received, image });
+    const acknowledged = await notify(job.targetTab, {
+      type: 'PAGE',
+      id: job.id,
+      index: job.received,
+      image,
+      ack: job.protocol === 2,
+    });
+    if (acknowledged?.error) throw Error(acknowledged.error);
     job.received++;
     await saveJob(job);
   } else if (message.type === 'CAPTURE_DONE') {
@@ -172,13 +271,18 @@ function enqueue(task) {
   return result;
 }
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (typeof serviceTypes !== 'undefined' && serviceTypes.has(message?.type)) {
+    if (message.channel !== 'DOC88_PDF') return;
+    handleService(message, sender).then(reply, (error) => reply({ error: error.message }));
+    return true;
+  }
   enqueue(() => handle(message, sender)).then(reply, (error) => reply({ error: error.message }));
   return true;
 });
 chrome.action.onClicked.addListener(async (tab) => {
   try {
     docURL(tab.url);
-    await enqueue(() => startJob(tab.url, tab.id, null));
+    await enqueue(() => startJob(tab.url, tab.id, null, { protocol: 2 }));
   } catch (error) {
     if (tab.url && /^https:\/\/(?:www\.)?doc88\.com\/p-\d+\.html/.test(tab.url))
       await notify(tab.id, { type: 'NOTICE', message: error.message }).catch(() => {});
@@ -186,12 +290,15 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
+  void chrome.storage.session.get('isoSession').then(async ({ isoSession }) => {
+    if (isoSession && (isoSession.owner === tabId || isoSession.tabId === tabId)) {
+      await chrome.storage.session.remove('isoSession');
+      if (isoSession.owner === tabId) await chrome.tabs.remove(isoSession.tabId).catch(() => {});
+    }
+  });
   void enqueue(async () => {
     const job = await getJob();
     if (job && (tabId === job.targetTab || (tabId === job.sourceTab && job.phase !== 'ocr')))
       await endJob(job, 'Вкладка документа или обработки закрыта. Запусти заново.');
   });
-});
-chrome.runtime.onInstalled.addListener((details) => {
-  if (details.reason === 'install') void chrome.tabs.create({ url: SITE });
 });

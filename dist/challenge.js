@@ -12,9 +12,10 @@
   let generation = 0;
   let dragging = null;
   let actions = Promise.resolve();
+  let pendingMove = null;
   let lastMove = 0;
   async function request(url, value) {
-    const response = await fetch(url, {
+    const response = await (window.Doc88Browser?.fetch || fetch)(url, {
       method: value ? 'POST' : 'GET',
       cache: 'no-store',
       signal: AbortSignal.timeout(10000),
@@ -64,7 +65,20 @@
   function send(type, point, source = dragging || (frame && { token: frame.token, jobId })) {
     if (!source?.jobId) return;
     const input = { type, token: source.token, ...point };
-    const pending = actions.then(() => request(`/api/jobs/${source.jobId}/challenge/input`, input));
+    if (
+      type === 'move' &&
+      pendingMove?.jobId === source.jobId &&
+      pendingMove.input.token === source.token
+    ) {
+      pendingMove.input = input;
+      return;
+    }
+    const action = { jobId: source.jobId, input };
+    if (type === 'move') pendingMove = action;
+    const pending = actions.then(() => {
+      if (pendingMove === action) pendingMove = null;
+      return request(`/api/jobs/${action.jobId}/challenge/input`, action.input);
+    });
     actions = pending.catch((error) => {
       if (source.jobId === jobId && ![404, 409].includes(error.status))
         status.textContent = 'Движение не передалось. Отпусти ползунок и обнови изображение.';
@@ -132,7 +146,7 @@
   };
   window.addEventListener('pagehide', () => {
     if (dragging)
-      fetch(`/api/jobs/${dragging.jobId}/challenge/input`, {
+      (window.Doc88Browser?.fetch || fetch)(`/api/jobs/${dragging.jobId}/challenge/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-doc88-request': '1' },
         body: JSON.stringify({ type: 'up', token: dragging.token, ...dragging.point }),

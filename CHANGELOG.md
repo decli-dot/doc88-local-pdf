@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.9.0
+
+- Bring the full document workflow to GitHub Pages using the shared local interface and ISO/search verification logic.
+- Add bounded extension services for official ISO catalogue data and Doc88 search, edition history, exact official filenames, supplements and page extent checks.
+- Run image preparation, searchable PDF generation, hierarchical outlines and normative-reference extraction in the browser.
+- Persist downloaded images, page OCR caches, jobs and batches in IndexedDB; acknowledge images only after storage and verify hashes when resuming.
+- Add browser queues, page ranges, ZIP exports with reports and safe recovery after reloading a capture tab.
+- Relay manual Doc88 challenge images and user pointer events through the extension; validate ownership, addresses, tokens and coordinates, and coalesce queued moves.
+- Require extension 1.9 with explicit ISO, scripting and debugger permissions; keep ZIP conversion available without the extension.
+- Verify the full browser workflow in an isolated Chromium profile, including synthetic manual challenge control and resumable OCR.
+
 ## 1.8.0
 
 - Upscale small or soft scans locally before OCR with bounded dimensions and mild sharpening; preserve original ZIP images and physical PDF page geometry.

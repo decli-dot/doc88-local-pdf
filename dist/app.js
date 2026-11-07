@@ -1,6 +1,7 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
 const { normalizeQuery } = window.Doc88Query;
+const fileLink = (path) => window.Doc88Browser?.link(path) || path;
 const completeStages = new Set(['done', 'error', 'cancelled', 'interrupted']);
 const stageNames = {
   queued: 'В очереди',
@@ -31,6 +32,11 @@ let activeId = null;
 let followActive = true;
 let latestBatches = [];
 let lastBatches = '';
+window.addEventListener('doc88-import', (event) => {
+  selectedId = event.detail.id;
+  followActive = true;
+  void refresh();
+});
 const modes = ['search', 'batch', 'url', 'zip'];
 let editionKey = '';
 let editionJobId = null;
@@ -53,7 +59,7 @@ function renderDocumentDetails(job) {
       const item = document.createElement('li'),
         link = document.createElement('a');
       link.textContent = node.label + (node.title ? ' ' + node.title : '');
-      link.href = `/api/jobs/${job.id}/pdf?preview=1#page=${node.page}`;
+      link.href = fileLink(`/api/jobs/${job.id}/pdf?preview=1#page=${node.page}`);
       link.target = '_blank';
       link.rel = 'noopener';
       link.title = `Лист PDF ${node.page}`;
@@ -267,7 +273,7 @@ function error(message) {
   $('form-error').hidden = !message;
 }
 async function api(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await (window.Doc88Browser?.fetch || fetch)(url, {
     ...options,
     headers: { 'x-doc88-request': '1', ...options.headers },
   });
@@ -403,10 +409,10 @@ function renderJob(job) {
       : `${job.total ? `${job.current} / ${job.total} стр. · ` : ''}${time}`;
   $('manual-note').hidden = job.stage !== 'waiting';
   $('result-actions').hidden = !job.pdfReady;
-  $('pdf-download').href = `/api/jobs/${job.id}/pdf`;
+  $('pdf-download').href = fileLink(`/api/jobs/${job.id}/pdf`);
   $('pdf-download').download = job.pdfFilename || 'document.pdf';
-  $('pdf-preview').href = `/api/jobs/${job.id}/pdf?preview=1`;
-  $('zip-download').href = `/api/jobs/${job.id}/zip`;
+  $('pdf-preview').href = fileLink(`/api/jobs/${job.id}/pdf?preview=1`);
+  $('zip-download').href = fileLink(`/api/jobs/${job.id}/zip`);
   $('zip-download').hidden = !job.archiveReady;
   $('source-document').hidden = job.kind !== 'search' || !job.pdfReady;
   $('source-document').href = job.url || '#';
@@ -523,7 +529,7 @@ function renderSearch(job) {
       const pdf = document.createElement('a');
       pdf.className = 'text-link';
       pdf.textContent = 'Скачать проверенный PDF ↓';
-      pdf.href = `/api/jobs/${job.id}/pdf`;
+      pdf.href = fileLink(`/api/jobs/${job.id}/pdf`);
       actions.append(pdf);
     } else if (result.status !== 'checking') {
       const check = document.createElement('button');
@@ -653,7 +659,7 @@ function renderBatches() {
     if (batch.ready) {
       const link = document.createElement('a');
       link.className = 'primary';
-      link.href = `/api/batches/${batch.id}/zip`;
+      link.href = fileLink(`/api/batches/${batch.id}/zip`);
       link.textContent = `Скачать готовые PDF (${batch.ready}) ↓`;
       actions.append(link);
     }
@@ -715,7 +721,7 @@ function renderBatches() {
       if (item.pdfReady) {
         const link = document.createElement('a');
         link.className = 'text-link';
-        link.href = `/api/jobs/${item.id}/pdf`;
+        link.href = fileLink(`/api/jobs/${item.id}/pdf`);
         link.textContent = 'PDF ↓';
         row.append(link);
       }
@@ -880,7 +886,11 @@ $('shutdown').onclick = async () => {
     offline = true;
     $('engine-status').textContent = 'Приложение закрыто';
     $('shutdown').disabled = true;
-    error('Приложение закрыто. Для нового запуска открой Start.cmd.');
+    error(
+      window.Doc88Browser
+        ? 'Работа остановлена. Обнови страницу, чтобы продолжить.'
+        : 'Приложение закрыто. Для нового запуска открой Start.cmd.',
+    );
     for (const id of ['start-search', 'start-url', 'start-zip', 'cancel']) $(id).disabled = true;
   } catch (failure) {
     error(failure.message);

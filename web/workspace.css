@@ -1,0 +1,46 @@
+.browser-setup {
+  margin: 0 0 24px;
+  max-width: 1500px;
+  border: 1px solid #d6dfd1;
+  border-radius: 18px;
+  background: #edf2e7;
+}
+.browser-setup summary {
+  padding: 18px 24px;
+  cursor: pointer;
+  font-weight: 600;
+}
+#browser-connection {
+  display: inline-block;
+  margin-left: 16px;
+  color: #5e7467;
+  font-size: 12px;
+  font-weight: 400;
+}
+.browser-setup-body {
+  padding: 0 24px 16px;
+  max-width: 950px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.browser-setup li + li {
+  margin-top: 7px;
+}
+.browser-setup code {
+  overflow-wrap: anywhere;
+  background: #dfe9d8;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+@media (max-width: 600px) {
+  #browser-connection {
+    display: block;
+    margin: 8px 0 0;
+  }
+  .browser-setup summary {
+    padding: 16px;
+  }
+  .browser-setup-body {
+    padding: 0 16px 12px;
+  }
+}

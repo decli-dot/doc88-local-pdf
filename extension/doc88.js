@@ -32,6 +32,11 @@
     status.textContent = 'Открываем обработку…';
     try {
       const result = await send('START_DOC88');
+      if (result.queued) {
+        button.disabled = false;
+        status.textContent = 'Документ добавлен в программу.';
+        return;
+      }
       if (!active) active = { id: result.id, cancelled: false, waiting: true };
       cancel.hidden = false;
     } catch (error) {
@@ -58,7 +63,13 @@
       // Messages also keep the MV3 service worker alive while waiting for Doc88.
       if (Date.now() - progressAt > 5000) {
         status.textContent = message;
-        await send('CAPTURE_PROGRESS', { id: job.id, message });
+        await send('CAPTURE_PROGRESS', {
+          id: job.id,
+          message,
+          challenge: Boolean(
+            document.getElementById('captcha_reading') || document.getElementById('continue_page'),
+          ),
+        });
         progressAt = Date.now();
       }
       await sleep(200);
@@ -114,10 +125,23 @@
         document.querySelector('h1')?.title ||
         document.querySelector('meta[property="og:title"]')?.content ||
         document.title;
-      await send('CAPTURE_META', { id: job.id, total, title });
-      for (let index = 0; index < total; index++) {
+      const fromPage = job.fromPage || 1,
+        toPage = job.toPage || total;
+      if (fromPage > total || toPage > total || toPage < fromPage)
+        throw Error('Диапазон выходит за пределы документа.');
+      await send('CAPTURE_META', {
+        id: job.id,
+        total: toPage - fromPage + 1,
+        documentTotal: total,
+        title,
+      });
+      for (let index = 0; index < toPage - fromPage + 1; index++) {
         check(job);
-        const canvas = document.getElementById('page_' + (index + 1));
+        if (job.skip?.includes(index)) {
+          await send('CAPTURE_CACHED', { id: job.id, index });
+          continue;
+        }
+        const canvas = document.getElementById('page_' + (index + fromPage));
         canvas.scrollIntoView({ block: 'center' });
         await waitFor(
           job,
@@ -148,7 +172,13 @@
     if (sender.id !== chrome.runtime.id || message?.channel !== 'DOC88_PDF') return;
     if (message.type === 'CAPTURE') {
       if (!active || (active.id === message.id && active.waiting)) {
-        active = { id: message.id, cancelled: false };
+        active = {
+          id: message.id,
+          cancelled: false,
+          fromPage: message.fromPage,
+          toPage: message.toPage,
+          skip: message.skip,
+        };
         void capture(active);
       }
       reply({ ok: true });

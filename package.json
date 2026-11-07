@@ -1,6 +1,6 @@
 {
   "name": "doc88-local-pdf",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "description": "Local Doc88 image archive downloader and searchable PDF converter",
   "license": "MIT",
@@ -44,6 +44,9 @@
     "tesseract.js": "7.0.0"
   },
   "devDependencies": {
+    "@noble/hashes": "2.4.0",
+    "buffer": "6.0.3",
+    "esbuild": "0.28.2",
     "prettier": "3.9.10"
   }
 }

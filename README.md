@@ -1,25 +1,25 @@
-# 📄 Doc88 Local PDF
+# 📄 Doc88 PDF
 
 **Найди документ → получи PDF, в котором можно искать, выделять и копировать текст.**
 
-Программа превращает страницы Doc88 в один PDF с распознанным английским текстом. Работает на твоём компьютере, управление — в браузере.
+Программа превращает страницы Doc88 в один PDF с распознанным английским текстом. Поиск ISO, проверка документов и OCR работают прямо в браузере. Node.js не нужен.
 
 ![Три шага: введи запрос, программа проверит документ и распознает текст, скачай PDF](docs/assets/overview.svg)
 
 [![Последняя версия](https://img.shields.io/github/v/release/decli-dot/doc88-local-pdf?label=версия&color=176b55&style=flat-square)](https://github.com/decli-dot/doc88-local-pdf/releases/latest) [![Проверки](https://github.com/decli-dot/doc88-local-pdf/actions/workflows/ci.yml/badge.svg)](https://github.com/decli-dot/doc88-local-pdf/actions/workflows/ci.yml) [![Лицензия MIT](https://img.shields.io/badge/лицензия-MIT-396aab?style=flat-square)](LICENSE)
 
-### [⬇️ Скачать программу для Windows](https://github.com/decli-dot/doc88-local-pdf/releases/latest/download/doc88-local-pdf-v1.8.0.zip)
+### [🚀 Открыть программу в браузере](https://decli-dot.github.io/doc88-local-pdf/)
 
 [Что нового](https://github.com/decli-dot/doc88-local-pdf/releases/latest) · [Подробная инструкция](docs/GUIDE.md) · [Сообщить о проблеме](https://github.com/decli-dot/doc88-local-pdf/issues)
 
 ## 🚀 Первый запуск — 4 шага
 
-1. Установи **[Node.js 24](https://nodejs.org/en/download)** — он нужен для работы программы.
-2. **[Скачай ZIP](https://github.com/decli-dot/doc88-local-pdf/releases/latest/download/doc88-local-pdf-v1.8.0.zip)** и распакуй его в отдельную папку.
-3. Открой **`Setup.cmd`** и дождись установки.
-4. Открой **`Start.cmd`** — программа появится в браузере.
+1. Открой **[сайт программы](https://decli-dot.github.io/doc88-local-pdf/)** в Chrome или Edge.
+2. **[Скачай расширение](https://decli-dot.github.io/doc88-local-pdf/doc88-browser-extension.zip)** и распакуй ZIP в постоянную папку.
+3. Открой `chrome://extensions` или `edge://extensions`, включи **«Режим разработчика»** и загрузи распакованное расширение. [Инструкция](extension/README.md).
+4. Обнови страницу программы — можно искать документы.
 
-Нужен установленный **Edge или Chrome**. Отдельно устанавливать OCR не требуется. При первом распознавании программа скачает английскую языковую модель.
+Расширение получает данные с ISO и Doc88; OCR выполняется на твоём устройстве. При первом распознавании загрузится английская языковая модель. Готовый ZIP можно обработать и без расширения.
 
 ## 🔎 Как получить документ
 
@@ -46,14 +46,25 @@
 
 ## 🔄 Как обновить
 
-Закрой программу → распакуй новый ZIP с заменой файлов → снова открой **`Setup.cmd`**, затем **`Start.cmd`**.
+Замени файлы расширения на новую версию, нажми значок обновления на его карточке и обнови сайт. Для переноса с версии 1.2 потребуется подтвердить новые доступы.
 
-**Сохрани папку `.data`**: в ней история, документы и данные для продолжения задач.
+**История и файлы хранятся в браузере.** Очистка данных сайта удалит их.
+
+<details>
+<summary>💻 Нужна локальная программа для Windows?</summary>
+
+1. Установи **[Node.js 24](https://nodejs.org/en/download)**.
+2. **[Скачай локальную программу](https://github.com/decli-dot/doc88-local-pdf/releases/latest/download/doc88-local-pdf-v1.8.0.zip)** и распакуй ZIP.
+3. Открой **`Setup.cmd`**, затем **`Start.cmd`**. Нужен Edge или Chrome.
+
+При обновлении закрой программу, замени файлы и снова запусти `Setup.cmd`. Сохрани папку `.data`: в ней документы и история локальной версии.
+
+</details>
 
 ## 📚 Если нужны подробности
 
 - **[Полная инструкция](docs/GUIDE.md)** — поиск, проверки, настройки и решение типичных вопросов.
-- **[Браузерный конвертер](https://decli-dot.github.io/doc88-local-pdf/)** — отдельный вариант без Node.js. Для получения страниц Doc88 нужно расширение; функций поиска ISO и очереди в нём нет.
+- **[Об установке расширения и его доступах](extension/README.md)** — для поиска ISO и получения страниц Doc88.
 - **[Для разработчиков](CONTRIBUTING.md)** · [Что проверено](VALIDATION.md) · [История изменений](CHANGELOG.md).
 
 Основано на [doc88-downloader](https://github.com/apankowski/doc88-downloader). Код программы — [MIT](LICENSE); исходный загрузчик и его лицензия сохранены в [vendor](vendor/). Программа не связана с Doc88. Используй её для документов, к которым у тебя есть законный доступ.

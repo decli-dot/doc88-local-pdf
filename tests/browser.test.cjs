@@ -88,7 +88,12 @@ test('extension owns one job, authenticates both tabs, and preserves state after
   );
   await assert.rejects(app.send('READY', { ...target, frameId: 1 }, { id: job.id }));
   await app.send('READY', target, { id: job.id });
-  await app.send('CAPTURE_META', app.source, { id: job.id, total: 2, title: 'Example' });
+  await app.send('CAPTURE_META', app.source, {
+    id: job.id,
+    total: 2,
+    documentTotal: 2,
+    title: 'Example',
+  });
   await assert.rejects(
     app.send('CAPTURE_PAGE', app.source, {
       id: job.id,
@@ -116,6 +121,12 @@ test('extension owns one job, authenticates both tabs, and preserves state after
   await app.send('START_DOC88', app.source);
   const cancelled = app.storage.job;
   await app.send('CANCEL', app.source, { id: cancelled.id });
+  assert.equal(app.storage.job, undefined);
+  await app.send('START_DOC88', app.source);
+  const interrupted = app.storage.job;
+  await app.send('RESET_CAPTURE', app.target(interrupted.targetTab + 1));
+  assert.equal(app.storage.job.id, interrupted.id);
+  await app.send('RESET_CAPTURE', app.target(interrupted.targetTab));
   assert.equal(app.storage.job, undefined);
 });
 test('browser ZIP processing orders pages naturally and rejects invalid or oversized images', async () => {
