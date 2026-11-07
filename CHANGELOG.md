@@ -8,6 +8,7 @@
 - Extract normative references only from their section, preserve dated references, flag series/incomplete OCR, and queue selected references.
 - Read amendments/corrigenda from the exact ISO edition, show official links, and search supplements as separate documents with their own title and page count.
 - Treat uncertain language as a review note rather than a rejection; continue rejecting clearly foreign body text.
+- Include the new processing modules in the cloud deployment build context and its verification triggers.
 
 ## 1.7.0
 

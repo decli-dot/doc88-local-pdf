@@ -4,6 +4,10 @@
 !package-lock.json
 !cloud-server.cjs
 !pipeline.cjs
+!checkpoints.cjs
+!page-check.cjs
+!image-quality.cjs
+!document-analysis.cjs
 !challenge-view.cjs
 !runtime.cjs
 !LICENSE
