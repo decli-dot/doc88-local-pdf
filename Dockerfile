@@ -7,7 +7,7 @@ RUN npm ci --omit=dev && npm cache clean --force \
     && apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/* \
     && chmod -R a+rX /ms-playwright
-COPY cloud-server.cjs pipeline.cjs runtime.cjs LICENSE ./
+COPY cloud-server.cjs pipeline.cjs checkpoints.cjs page-check.cjs image-quality.cjs document-analysis.cjs runtime.cjs challenge-view.cjs LICENSE ./
 COPY cloud ./cloud
 COPY web/style.css ./web/style.css
 COPY dist/icon.svg ./dist/icon.svg

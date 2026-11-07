@@ -5,13 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { dependency } = require('../runtime.cjs');
-const {
-  validateURL,
-  validateRange,
-  unpackArchive,
-  convertArchive,
-  nativeAvailable,
-} = require('../pipeline.cjs');
+const { validateURL, validateRange, unpackArchive, convertArchive } = require('../pipeline.cjs');
 const JSZip = dependency('jszip');
 const { PDFDocument } = dependency('pdf-lib');
 const fixture = (name) => fs.readFile(path.join(__dirname, 'fixtures', name));
@@ -76,13 +70,19 @@ test('real OCR retains page images, natural order, landscape page, blank page', 
     path.join(directory, 'archive.zip'),
     await zip.generateAsync({ type: 'nodebuffer' }),
   );
-  const job = jobAt(directory);
+  const title =
+    'ISO 17450-3:2016 — Geometrical product specifications (GPS) — General concepts — Part 3: Toleranced features';
+  const filename =
+    'ISO 17450-3 2016 Geometrical product specifications (GPS) — General concepts — Part 3 - Toleranced features.pdf';
+  const job = jobAt(directory, { title, officialFilename: filename });
   await convertArchive(job);
   assert.equal(job.stage, 'done');
   assert.equal(job.total, 3);
   assert.equal(job.blankPages, 1);
   assert.ok(job.textChars > 100);
   const pdf = await PDFDocument.load(await fs.readFile(path.join(directory, 'result.pdf')));
+  assert.equal(pdf.getTitle(), title);
+  assert.equal(job.pdfFilename, filename);
   assert.equal(pdf.getPageCount(), 3);
   const pages = pdf.getPages();
   assert.ok(pages[0].getWidth() < pages[0].getHeight());
@@ -91,10 +91,8 @@ test('real OCR retains page images, natural order, landscape page, blank page', 
     assert.ok(
       page.node.Resources().lookup(dependency('pdf-lib').PDFName.of('XObject')).keys().length > 0,
     );
-  if (nativeAvailable) {
-    assert.match(await fs.readFile(path.join(directory, 'ocr/page00001.txt'), 'utf8'), /24680/);
-    assert.match(await fs.readFile(path.join(directory, 'ocr/page00002.txt'), 'utf8'), /13579/);
-  }
+  assert.match(await fs.readFile(path.join(directory, 'ocr/page00001.txt'), 'utf8'), /24680/);
+  assert.match(await fs.readFile(path.join(directory, 'ocr/page00002.txt'), 'utf8'), /13579/);
 });
 
 test('bad archives and missing downloaded pages cannot produce a PDF', async (t) => {
@@ -169,6 +167,51 @@ test('local API accepts ZIP, creates a downloadable searchable PDF, rejects fore
       await fetch(origin + '/api/jobs', {
         method: 'POST',
         headers: { Origin: 'https://evil.com', 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+    ).status,
+    403,
+  );
+  for (const [input, requestOrigin, expected] of [
+    [{ query: '' }, origin, 400],
+    [
+      {
+        query: 'ISO 14405-1:2025',
+        candidateURL: 'https://www.doc88.com/p-1.html',
+        sourceJobId: 'missing',
+      },
+      origin,
+      400,
+    ],
+    [{ query: 'ISO 14405-1:2025' }, 'https://evil.com', 403],
+  ]) {
+    const search = await fetch(origin + '/api/search', {
+      method: 'POST',
+      headers: {
+        Origin: requestOrigin,
+        'x-doc88-request': '1',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    });
+    assert.equal(search.status, expected);
+  }
+  const missingChallenge = '/api/jobs/00000000-0000-0000-0000-000000000000/challenge/';
+  assert.equal((await fetch(origin + missingChallenge + 'frame')).status, 403);
+  assert.equal(
+    (await fetch(origin + missingChallenge + 'frame', { headers: { 'x-doc88-request': '1' } }))
+      .status,
+    404,
+  );
+  assert.equal(
+    (
+      await fetch(origin + missingChallenge + 'input', {
+        method: 'POST',
+        headers: {
+          Origin: 'https://evil.com',
+          'x-doc88-request': '1',
+          'Content-Type': 'application/json',
+        },
         body: '{}',
       })
     ).status,

@@ -7,8 +7,18 @@ const files = [
   'server.cjs',
   'cloud-server.cjs',
   'pipeline.cjs',
+  'checkpoints.cjs',
+  'page-check.cjs',
+  'image-quality.cjs',
+  'document-analysis.cjs',
+  'batch.cjs',
+  'search.cjs',
+  'iso-catalog.cjs',
+  'challenge-view.cjs',
   'launcher.cjs',
   'dist/app.js',
+  'dist/query.js',
+  'dist/challenge.js',
 ];
 for (const directory of ['scripts', 'tests', 'extension', 'web', 'cloud']) {
   files.push(

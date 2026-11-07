@@ -4,6 +4,7 @@
 !package-lock.json
 !cloud-server.cjs
 !pipeline.cjs
+!challenge-view.cjs
 !runtime.cjs
 !LICENSE
 !cloud/

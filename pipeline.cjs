@@ -3,6 +3,10 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { dependency, nativeOCR, browserChannel } = require('./runtime.cjs');
+const { digest, inspectPages } = require('./page-check.cjs');
+const { atomicWrite, readJSON, capturePages, cachedArchive } = require('./checkpoints.cjs');
+const { prepareOCRImage } = require('./image-quality.cjs');
+const { buildStructure, normativeReferences, addPDFStructure } = require('./document-analysis.cjs');
 const JSZip = dependency('jszip');
 const { PDFDocument } = dependency('pdf-lib');
 const native = nativeOCR();
@@ -79,12 +83,15 @@ function cleanName(value) {
 
 async function downloadArchive(job, dataDir, options = {}) {
   checkAbort(job);
+  if (await cachedArchive(job)) return;
   const { chromium } = dependency('playwright');
   job.update({
     stage: 'opening',
-    message: options.headless
-      ? 'Открываем документ в облачном браузере…'
-      : 'Открываем документ в отдельном окне браузера…',
+    message: options.inlineChallenge
+      ? 'Открываем документ внутри приложения…'
+      : options.headless
+        ? 'Открываем документ в облачном браузере…'
+        : 'Открываем документ в отдельном окне браузера…',
   });
   const context = await chromium.launchPersistentContext(path.join(dataDir, 'browser-profile'), {
     channel: options.channel || browserChannel(),
@@ -97,6 +104,10 @@ async function downloadArchive(job, dataDir, options = {}) {
   const closeOnAbort = () => context.close().catch(() => {});
   job.controller.signal.addEventListener('abort', closeOnAbort, { once: true });
   let challengeError = null;
+  let challengeView = null;
+  let watchingChallenge = false;
+  let challengeTimer = null;
+  let challengeWatchStopped = false;
   try {
     checkAbort(job);
     const page = context.pages()[0] || (await context.newPage());
@@ -113,7 +124,9 @@ async function downloadArchive(job, dataDir, options = {}) {
       }
       job.update({
         stage: 'waiting',
-        message: 'Doc88 просит подтверждение. Реши капчу или подтверди чтение в открытом окне.',
+        message: options.inlineChallenge
+          ? 'Doc88 просит подтверждение. Выполни его в панели справа.'
+          : 'Doc88 просит подтверждение. Реши капчу или подтверди чтение в открытом окне.',
       });
       await dialog.dismiss().catch(() => {});
     });
@@ -156,8 +169,56 @@ async function downloadArchive(job, dataDir, options = {}) {
         );
       return result.result.value;
     };
+    if (options.inlineChallenge) {
+      const { createChallengeView, visibleChallenge } = require('./challenge-view.cjs');
+      challengeView = createChallengeView({ page, cdp, evaluate: evaluateConsole });
+      options.onBrowserView?.(challengeView);
+      const watch = async () => {
+        if (
+          challengeWatchStopped ||
+          watchingChallenge ||
+          job.controller.signal.aborted ||
+          page.isClosed()
+        )
+          return;
+        watchingChallenge = true;
+        try {
+          const visible = Boolean(await evaluateConsole(visibleChallenge));
+          if (challengeWatchStopped) return;
+          if (visible !== Boolean(job.challengeAvailable)) {
+            job.update({
+              challengeAvailable: visible,
+              ...(visible
+                ? {
+                    stage: 'waiting',
+                    message: 'Doc88 просит подтверждение. Передвинь ползунок в панели справа.',
+                  }
+                : {}),
+            });
+            if (!visible) await challengeView.reset();
+          }
+        } catch {
+          /* The page can navigate or close while a check is pending. */
+        } finally {
+          watchingChallenge = false;
+        }
+      };
+      await watch();
+      challengeTimer = setInterval(() => {
+        void watch();
+      }, 400);
+      challengeTimer.unref();
+    }
     const info = await evaluateConsole(
-      `(() => {\n${upstream}\nwindow.__doc88OriginalDownloader = downloadPages; return { count: getPageCount(), title: getDocumentTitle() || document.title };\n})()`,
+      `(() => {\n${upstream}\nwindow.__doc88Reveal = revealAllPagePlaceholders;
+      window.__doc88Capture = async (number) => {
+        const canvas = getPageCanvas(number);
+        if (!canvas) throw new Error('Missing page canvas ' + number);
+        await preloadPage(number, canvas);
+        const blob = await captureAsImageBlob(canvas, imageFormatFor({}));
+        return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); });
+      };
+      return { count: getPageCount(), title: getDocumentTitle() || document.title };\n})()`,
     );
     if (!Number.isSafeInteger(info.count) || info.count < 1)
       throw new Error('Doc88 не сообщил число страниц.');
@@ -177,18 +238,46 @@ async function downloadArchive(job, dataDir, options = {}) {
     });
     // The page counter arrives before the asynchronous document renderer.
     // Wait for the first canvas before calling the unchanged upstream script.
-    const rendererDeadline = Date.now() + 90000;
+    let rendererDeadline = Date.now() + 90000;
+    let waitingForCaptcha = false;
+    const manualDeadline = Date.now() + 15 * 60 * 1000;
     while (!(await evaluateConsole("Boolean(document.getElementById('page_1'))"))) {
       checkAbort(job);
+      const captcha = await evaluateConsole(
+        "Boolean(document.getElementById('captcha_reading')?.getClientRects().length)",
+      );
+      if (captcha) {
+        if (options.rejectChallenges)
+          throw new Error(
+            'Doc88 запросил капчу до первой страницы. Требуется ручное подтверждение в окне Doc88.',
+          );
+        if (!waitingForCaptcha) {
+          waitingForCaptcha = true;
+          job.update({
+            stage: 'waiting',
+            message: options.inlineChallenge
+              ? 'Doc88 показывает проверку перед первой страницей. Пройди её в панели справа.'
+              : 'Doc88 показывает ползунок проверки перед первой страницей. Пройди проверку в открытом окне документа.',
+          });
+        }
+        if (Date.now() >= manualDeadline)
+          throw new Error('Истекло время ожидания подтверждения Doc88. Попробуй снова.');
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        continue;
+      }
+      if (waitingForCaptcha) {
+        waitingForCaptcha = false;
+        rendererDeadline = Date.now() + 90000;
+        job.update({ stage: 'opening', message: 'Ждём загрузку страниц после подтверждения…' });
+      }
       if (Date.now() >= rendererDeadline)
         throw new Error(
           'Doc88 не загрузил страницы документа. Проверь открытое окно и повтори попытку.',
         );
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    // Upstream code creates the original ZIP. OCR libraries never run on Doc88.
-    const pendingDownload = page.waitForEvent('download', { timeout: 15 * 60 * 1000 });
-    pendingDownload.catch(() => {});
+    // Reuse the upstream page renderer/capture functions, checkpoint each image
+    // locally, then assemble the ZIP locally. Manual challenges are unchanged.
     let running = true;
     const watchdog = setTimeout(
       () => {
@@ -197,18 +286,21 @@ async function downloadArchive(job, dataDir, options = {}) {
       15 * 60 * 1000,
     );
     try {
-      const [download] = await Promise.all([
-        pendingDownload,
-        evaluateConsole(
-          `window.__doc88OriginalDownloader(${JSON.stringify({ fromPage: job.fromPage, toPage: end })})`,
-          true,
-        ),
-      ]);
-      checkAbort(job);
-      const failure = await download.failure();
-      if (failure) throw new Error(`Не удалось скачать архив: ${failure}`);
-      await download.saveAs(path.join(job.directory, 'archive.zip'));
-      job.update({ archiveReady: true, archiveFilename: cleanName(info.title) + '.zip' });
+      await evaluateConsole('window.__doc88Reveal()', true);
+      await capturePages(
+        job,
+        { ...info, filename: cleanName(info.title) + '.zip' },
+        async (number) => {
+          const data = await evaluateConsole(`window.__doc88Capture(${number})`, true);
+          if (
+            typeof data !== 'string' ||
+            data.length > MAX_IMAGE_BYTES * 1.4 ||
+            !data.startsWith('data:image/jpeg;base64,')
+          )
+            throw Error(`Не удалось прочитать изображение страницы ${number}.`);
+          return Buffer.from(data.slice('data:image/jpeg;base64,'.length), 'base64');
+        },
+      );
     } finally {
       running = false;
       clearTimeout(watchdog);
@@ -216,6 +308,11 @@ async function downloadArchive(job, dataDir, options = {}) {
   } catch (error) {
     throw challengeError || error;
   } finally {
+    challengeWatchStopped = true;
+    clearInterval(challengeTimer);
+    await challengeView?.close().catch(() => {});
+    options.onBrowserView?.(null);
+    if (job.challengeAvailable) job.update({ challengeAvailable: false });
     job.controller.signal.removeEventListener('abort', closeOnAbort);
     await context.close().catch(() => {});
     job.browser = null;
@@ -307,11 +404,19 @@ async function convertArchive(job) {
   let worker = null;
   let textChars = 0;
   let blankPages = 0;
+  let reusedOCRPages = 0;
+  const texts = [],
+    hashes = [];
+  const enhancements = [];
+  const enhanceImages = job.enhanceImages !== false;
+  const engine =
+    (native ? 'native' : 'wasm') + '-eng-psm3-150-v2-' + (enhanceImages ? 'enhance1' : 'original');
   const stopWorker = () => {
     if (worker) worker.terminate().catch(() => {});
   };
   try {
-    if (!native) {
+    const ensureWorker = async () => {
+      if (native || worker) return;
       job.update({ stage: 'ocr', message: 'Загружаем английскую модель OCR для первого запуска…' });
       const Tesseract = dependency('tesseract.js');
       const cachePath =
@@ -336,7 +441,7 @@ async function convertArchive(job) {
         worker.setParameters({ tessedit_pageseg_mode: '3', user_defined_dpi: '150' }),
         job.controller.signal,
       );
-    }
+    };
     for (let i = 0; i < images.length; i++) {
       checkAbort(job);
       job.update({
@@ -344,17 +449,57 @@ async function convertArchive(job) {
         current: i,
         message: `Распознаём английский текст: страница ${i + 1} из ${images.length}`,
       });
-      let pagePDF, text;
-      if (native) {
-        const base = path.join(pagesDir, `page${String(i + 1).padStart(5, '0')}`);
-        await runNative(job, images[i], base);
+      let pagePDF,
+        text,
+        reused = false;
+      let enhancement = { scaleX: 1, scaleY: 1, enhanced: false };
+      const base = path.join(pagesDir, `page${String(i + 1).padStart(5, '0')}`);
+      const imageHash = digest(await fs.readFile(images[i]));
+      hashes.push(imageHash);
+      const record = await readJSON(base + '.json');
+      if (record?.imageHash === imageHash && record.engine === engine) {
+        try {
+          const [cachedPDF, cachedText] = await Promise.all([
+            fs.readFile(base + '.pdf'),
+            fs.readFile(base + '.txt', 'utf8'),
+          ]);
+          if (
+            digest(cachedPDF) === record.pdfHash &&
+            digest(cachedText) === record.textHash &&
+            (await PDFDocument.load(cachedPDF)).getPageCount() === 1
+          ) {
+            pagePDF = cachedPDF;
+            text = cachedText;
+            reusedOCRPages++;
+            reused = true;
+            enhancement = record.enhancement || enhancement;
+          }
+        } catch {
+          /* Damaged page caches are recognized again. */
+        }
+      }
+      let ocrImage = images[i];
+      if (!pagePDF) {
+        const prepared = await prepareOCRImage(images[i], base + '.enhanced.png', enhanceImages);
+        const { path: preparedPath, ...info } = prepared;
+        ocrImage = preparedPath;
+        enhancement = info;
+        checkAbort(job);
+      }
+      if (!pagePDF && native) {
+        await runNative(job, ocrImage, base + '.work');
         [pagePDF, text] = await Promise.all([
-          fs.readFile(base + '.pdf'),
-          fs.readFile(base + '.txt', 'utf8'),
+          fs.readFile(base + '.work.pdf'),
+          fs.readFile(base + '.work.txt', 'utf8'),
         ]);
-      } else {
+      } else if (!pagePDF) {
+        await ensureWorker();
+        job.update({
+          stage: 'ocr',
+          message: `Распознаём английский текст: страница ${i + 1} из ${images.length}`,
+        });
         const { data } = await abortable(
-          worker.recognize(images[i], { pdfTextOnly: false }, { text: true, pdf: true }),
+          worker.recognize(ocrImage, { pdfTextOnly: false }, { text: true, pdf: true }),
           job.controller.signal,
         );
         pagePDF = data.pdf;
@@ -364,12 +509,39 @@ async function convertArchive(job) {
       const source = await PDFDocument.load(pagePDF);
       if (source.getPageCount() !== 1)
         throw new Error(`Неожиданное число страниц в результате OCR страницы ${i + 1}.`);
+      if (!reused) {
+        await atomicWrite(base + '.pdf', pagePDF);
+        await atomicWrite(base + '.txt', text);
+        await atomicWrite(
+          base + '.json',
+          JSON.stringify({
+            imageHash,
+            engine,
+            pdfHash: digest(pagePDF),
+            textHash: digest(text),
+            enhancement,
+          }),
+        );
+        if (native)
+          await Promise.all(
+            ['.work.pdf', '.work.txt'].map((extension) => fs.rm(base + extension, { force: true })),
+          );
+      }
       const pages = await pdf.copyPages(source, [0]);
+      if (enhancement.enhanced) {
+        pages[0].scale(1 / enhancement.scaleX, 1 / enhancement.scaleY);
+        enhancements.push({ page: i + 1, ...enhancement });
+      }
       pdf.addPage(pages[0]);
       textChars += text.trim().length;
       if (!text.trim()) blankPages++;
-      job.update({ current: i + 1 });
+      texts.push(text);
+      job.update({ current: i + 1, reusedOCRPages });
     }
+    const pageIntegrity = inspectPages(texts, hashes, job.officialPages);
+    const documentStructure = buildStructure(texts);
+    const references = normativeReferences(texts);
+    addPDFStructure(pdf, documentStructure);
     job.update({ stage: 'merging', message: 'Собираем итоговый PDF…' });
     checkAbort(job);
     const bytes = await pdf.save();
@@ -386,10 +558,14 @@ async function convertArchive(job) {
       message: 'PDF готов. Можно скачать и искать текст.',
       current: images.length,
       pdfReady: true,
-      pdfFilename: cleanName(job.title) + '_OCR.pdf',
+      pdfFilename: job.officialFilename || cleanName(job.title) + '_OCR.pdf',
       bytes: bytes.length,
       textChars,
       blankPages,
+      pageIntegrity,
+      documentStructure,
+      normativeReferences: references,
+      imageEnhancement: { enabled: enhanceImages, pages: enhancements, count: enhancements.length },
       finishedAt: new Date().toISOString(),
     });
   } finally {

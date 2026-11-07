@@ -17,7 +17,8 @@ async function status() {
 async function main() {
   if (Number(process.versions.node.split('.')[0]) < 22)
     throw new Error('Install Node.js 24 LTS from https://nodejs.org');
-  for (const name of ['playwright', 'jszip', 'pdf-lib', 'tesseract.js']) dependency(name);
+  for (const name of ['playwright', 'jszip', 'pdf-lib', 'tesseract.js', 'sharp']) dependency(name);
+  await import('franc-min');
   let app = await status();
   if (app && app.app !== 'doc88-local-pdf')
     throw new Error('Another app is using this port. Set DOC88_PORT to another port.');

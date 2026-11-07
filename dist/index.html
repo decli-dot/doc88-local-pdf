@@ -6,6 +6,8 @@
     <title>Doc88 PDF · локальное приложение</title>
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/style.css" />
+    <script defer src="/challenge.js"></script>
+    <script defer src="/query.js"></script>
     <script defer src="/app.js"></script>
   </head>
   <body>
@@ -24,7 +26,7 @@
           <div class="eyebrow">ДОКУМЕНТЫ, С КОТОРЫМИ МОЖНО РАБОТАТЬ</div>
           <h1>Из Doc88 — в PDF с поиском</h1>
           <p>
-            Вставь ссылку. Получи документ, в котором можно<br class="wide-only" />
+            Найди документ или вставь ссылку. Получи PDF, в котором можно<br class="wide-only" />
             искать, выделять и копировать английский текст.
           </p>
         </section>
@@ -36,10 +38,30 @@
             </div>
             <div class="tabs" role="tablist" aria-label="Источник документа">
               <button
-                id="url-tab"
+                id="search-tab"
                 role="tab"
                 aria-selected="true"
+                aria-controls="search-panel"
+                type="button"
+              >
+                Найти документ
+              </button>
+              <button
+                id="batch-tab"
+                role="tab"
+                aria-selected="false"
+                aria-controls="batch-panel"
+                tabindex="-1"
+                type="button"
+              >
+                Списком
+              </button>
+              <button
+                id="url-tab"
+                role="tab"
+                aria-selected="false"
                 aria-controls="url-panel"
+                tabindex="-1"
                 type="button"
               >
                 По ссылке
@@ -55,7 +77,57 @@
                 Готовый ZIP
               </button>
             </div>
-            <form id="url-panel" role="tabpanel" aria-labelledby="url-tab">
+            <form id="search-panel" role="tabpanel" aria-labelledby="search-tab">
+              <label for="search-query">Название или обозначение документа</label>
+              <input
+                id="search-query"
+                type="text"
+                placeholder="Например, ISO 14405-1:2025"
+                minlength="3"
+                maxlength="180"
+                autocomplete="off"
+                required
+              />
+              <p class="helper">
+                Можно писать «iso 5458 2013» или «iso 5458-2013» — оформим как ISO 5458:2013. Без
+                года уточним действующее издание на iso.org.
+              </p>
+              <div class="search-explainer">
+                <p><strong>Английский текст</strong>Проверим содержимое, а не только название.</p>
+                <p>
+                  <strong>Проверка страниц</strong>Для ISO сверим объём с каталогом издателя и
+                  сохраним все страницы, заявленные Doc88.
+                </p>
+              </div>
+              <button id="start-search" class="primary" type="submit">
+                Найти и проверить <span aria-hidden="true">⌕</span>
+              </button>
+              <div class="helper">
+                Проверим до трёх вариантов и сразу подготовим PDF подходящего документа. Если Doc88
+                попросит подтверждение, капча появится рядом в программе.
+              </div>
+            </form>
+            <form id="batch-panel" role="tabpanel" aria-labelledby="batch-tab" hidden>
+              <label for="batch-queries">Документы — каждый с новой строки</label>
+              <textarea
+                id="batch-queries"
+                rows="6"
+                maxlength="6000"
+                required
+                placeholder="iso 5458 2018&#10;iso 129-1 2004&#10;ISO 17450-3"
+              ></textarea>
+              <p class="helper">
+                До 30 документов. Повторы уберём, обозначения оформим автоматически.
+              </p>
+              <button id="start-batch" class="primary" type="submit">
+                Добавить в очередь <span aria-hidden="true">＋</span>
+              </button>
+              <p class="helper">
+                Готовые PDF можно скачать одним архивом. Запросы, которым нужен выбор издания, будут
+                ждать тебя; остальные продолжат обработку.
+              </p>
+            </form>
+            <form id="url-panel" role="tabpanel" aria-labelledby="url-tab" hidden>
               <label for="document-url">Ссылка на документ Doc88</label>
               <input
                 id="document-url"
@@ -103,6 +175,11 @@
               </button>
             </form>
             <p id="form-error" class="error-text" role="alert" hidden></p>
+            <label class="quality-option"
+              ><input id="enhance-images" type="checkbox" checked /><span
+                >Увеличивать мелкие и размытые страницы перед OCR</span
+              ></label
+            >
             <div class="input-footer">
               <span>Язык OCR</span><strong>English</strong><span class="footer-dot">·</span
               ><span id="engine-status">Проверяем готовность…</span>
@@ -123,6 +200,14 @@
             </div>
             <div id="job-state" hidden>
               <h3 id="job-title"></h3>
+              <p id="naming-warning" class="helper" role="status" hidden></p>
+              <div id="iso-edition" class="iso-edition" hidden>
+                <span id="iso-edition-label">Действующее издание по ISO</span>
+                <a id="iso-edition-link" target="_blank" rel="noopener"></a>
+                <span id="iso-edition-date"></span>
+                <span id="iso-page-count"></span>
+                <div id="iso-supplements" class="iso-supplements" hidden></div>
+              </div>
               <div class="steps" aria-label="Этапы обработки">
                 <div data-step="download"><span>1</span>Архив страниц</div>
                 <div data-step="ocr"><span>2</span>Распознавание</div>
@@ -143,8 +228,7 @@
               <div id="manual-note" class="manual-note" hidden>
                 <strong>Нужно твоё действие</strong
                 ><span
-                  >Переключись в открытое окно с Doc88 и выполни подтверждение на странице.
-                  Обработка продолжится сама.</span
+                  >Выполни подтверждение в панели Doc88 рядом. Обработка продолжится сама.</span
                 >
               </div>
               <div id="result-actions" class="result-actions" hidden>
@@ -157,13 +241,107 @@
               <a id="zip-download" class="text-link archive-link" href="#" hidden
                 >Скачать исходный ZIP</a
               >
+              <a
+                id="source-document"
+                class="text-link archive-link"
+                href="#"
+                target="_blank"
+                rel="noopener"
+                hidden
+                >Открыть найденный документ на Doc88 ↗</a
+              >
               <button id="cancel" class="secondary" type="button" hidden>
                 Остановить обработку
               </button>
+              <button id="resume" class="primary resume-button" type="button" hidden>
+                Продолжить с сохранённого места
+              </button>
+              <p id="resume-note" class="helper" hidden></p>
+              <p id="integrity-note" class="integrity-note" role="status" hidden></p>
+              <p id="language-note" class="integrity-note" role="status" hidden></p>
+              <p id="enhancement-note" class="helper" hidden></p>
               <p id="blank-note" class="helper" hidden></p>
             </div>
           </section>
+          <aside
+            id="challenge-panel"
+            class="card challenge-card"
+            aria-labelledby="challenge-title"
+            hidden
+          >
+            <div class="card-heading">
+              <span class="section-number">03</span>
+              <h2 id="challenge-title">Проверка Doc88</h2>
+            </div>
+            <p class="challenge-intro">
+              Передвинь ползунок на изображении ниже — так же, как на сайте. На сенсорном экране
+              можно пальцем.
+            </p>
+            <div id="challenge-screen" class="challenge-screen" aria-busy="true">
+              <img
+                id="challenge-image"
+                alt="Проверка Doc88: передвинь ползунок мышью или пальцем"
+                draggable="false"
+                hidden
+              />
+              <p id="challenge-loading">Загружаем проверку…</p>
+            </div>
+            <p id="challenge-status" class="helper" role="status" aria-live="polite">
+              После подтверждения обработка продолжится автоматически.
+            </p>
+            <button id="challenge-refresh" class="secondary" type="button">
+              Обновить изображение
+            </button>
+          </aside>
         </div>
+        <section
+          id="document-details"
+          class="document-details"
+          aria-label="Структура и нормативные ссылки"
+          hidden
+        >
+          <details class="insight-card" open>
+            <summary>Структура документа <span id="structure-count"></span></summary>
+            <p id="structure-message" class="helper"></p>
+            <div id="structure-tree"></div>
+          </details>
+          <details class="insight-card" open>
+            <summary>Нормативные ссылки</summary>
+            <p id="references-message" class="helper"></p>
+            <div id="references-list"></div>
+            <button id="find-references" class="primary" type="button" hidden>
+              Искать выбранные ссылки
+            </button>
+            <p class="helper">
+              До 30 ссылок за раз. Для серии «all parts» сначала уточни часть стандарта.
+            </p>
+          </details>
+        </section>
+        <section id="batch-section" class="batch-section" aria-labelledby="batch-title" hidden>
+          <div class="history-heading">
+            <h2 id="batch-title">Очередь документов</h2>
+            <span>Обрабатываем по одному</span>
+          </div>
+          <div id="batch-list"></div>
+        </section>
+        <section
+          id="search-results-section"
+          class="search-results"
+          aria-labelledby="search-results-title"
+          hidden
+        >
+          <div class="history-heading">
+            <h2 id="search-results-title">Результаты поиска</h2>
+            <span id="search-summary" role="status"></span>
+          </div>
+          <p class="helper">
+            «Страницы Doc88» — все заявленные страницы сохранены. «Объём ISO» — страниц не меньше,
+            чем в каталоге издателя; обложка и вводные страницы учитываются отдельно от этого
+            минимума. Язык проверяется по основному тексту: сомнение показывается заметкой, явно
+            другой язык отклоняет вариант.
+          </p>
+          <div id="search-results-list" aria-live="polite"></div>
+        </section>
         <section id="history-section" class="history" hidden>
           <div class="history-heading">
             <h2>Последние документы</h2>
@@ -175,8 +353,8 @@
           <div>
             <span>↗</span>
             <p>
-              <strong>Отдельное окно Doc88</strong>Если сайт попросит капчу, реши её в открывшемся
-              окне.
+              <strong>Капча прямо в программе</strong>Если потребуется подтверждение, оно появится
+              рядом с результатом.
             </p>
           </div>
           <div>
@@ -193,5 +371,33 @@
       </main>
       <footer>Doc88 PDF <span>·</span> Локальная мастерская документов</footer>
     </div>
+    <dialog
+      id="edition-dialog"
+      class="edition-dialog"
+      aria-labelledby="edition-heading"
+      aria-describedby="edition-description"
+    >
+      <form id="edition-form">
+        <span class="eyebrow">История стандарта на ISO</span>
+        <h2 id="edition-heading">Выбери издание</h2>
+        <p id="edition-description"></p>
+        <div
+          id="edition-options"
+          class="edition-options"
+          role="group"
+          aria-label="Издания и прежние обозначения"
+        ></div>
+        <p class="helper">
+          Отозванные издания и документы с прежними обозначениями можно искать как архивные.
+        </p>
+        <p id="edition-error" class="error-text" role="alert" hidden></p>
+        <div class="edition-actions">
+          <button id="edition-cancel" class="secondary" type="button">Отменить поиск</button>
+          <button id="edition-submit" class="primary" type="submit" disabled>
+            Искать выбранное издание
+          </button>
+        </div>
+      </form>
+    </dialog>
   </body>
 </html>
