@@ -1,0 +1,105 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1200"
+  height="420"
+  viewBox="0 0 1200 420"
+  role="img"
+  aria-labelledby="title description"
+>
+  <title id="title">Из Doc88 — в PDF с поиском</title>
+  <desc id="description">
+    Введи запрос или ссылку. Программа проверит документ и распознает английский текст. Скачай PDF с
+    поиском и структурой разделов.
+  </desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#f0f6ef" />
+      <stop offset="1" stop-color="#f9f5eb" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="420" rx="24" fill="url(#background)" />
+  <circle cx="1156" cy="44" r="130" fill="#dcebe0" opacity=".65" />
+  <circle cx="1105" cy="58" r="72" fill="none" stroke="#c7dccd" stroke-width="1.5" />
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <text x="48" y="46" fill="#176b55" font-size="13" font-weight="700" letter-spacing="2.6">
+      DOC88 LOCAL PDF
+    </text>
+    <text x="48" y="104" fill="#173c32" font-size="44" font-weight="700">
+      Из Doc88 — в PDF с поиском
+    </text>
+    <text x="48" y="145" fill="#53685f" font-size="21">
+      Английский текст, с которым удобно работать.
+    </text>
+    <rect x="48" y="184" width="348" height="174" rx="18" fill="#fff" stroke="#d6e2d5" />
+    <circle cx="82" cy="220" r="15" fill="#e7f1e8" />
+    <text x="82" y="225" fill="#176b55" text-anchor="middle" font-size="14" font-weight="700">
+      1
+    </text>
+    <text x="109" y="227" fill="#173c32" font-size="22" font-weight="600">Введи запрос</text>
+    <rect x="70" y="250" width="304" height="44" rx="8" fill="#f4f7f2" stroke="#dce5d8" />
+    <circle cx="92" cy="270" r="6" fill="none" stroke="#176b55" stroke-width="2" />
+    <path d="m97 275 5 5" fill="none" stroke="#176b55" stroke-width="2" stroke-linecap="round" />
+    <text x="116" y="278" fill="#173c32" font-size="19">ISO 5458</text>
+    <text x="70" y="328" fill="#64776d" font-size="16">Или вставь ссылку / загрузи ZIP</text>
+    <path
+      d="M404 271h14m-5-5 5 5-5 5"
+      fill="none"
+      stroke="#83a58d"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <rect x="426" y="184" width="348" height="174" rx="18" fill="#fff" stroke="#d6e2d5" />
+    <circle cx="460" cy="220" r="15" fill="#fff0d9" />
+    <text x="460" y="225" fill="#9c6427" text-anchor="middle" font-size="14" font-weight="700">
+      2
+    </text>
+    <text x="487" y="227" fill="#173c32" font-size="22" font-weight="600">Проверка и OCR</text>
+    <g
+      fill="none"
+      stroke="#176b55"
+      stroke-width="2.2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="m451 263 4 4 7-8" />
+      <path d="m451 291 4 4 7-8" />
+      <path d="m451 319 4 4 7-8" />
+    </g>
+    <g fill="#53685f" font-size="17">
+      <text x="477" y="268">Издание по каталогу ISO</text>
+      <text x="477" y="296">Страницы документа</text>
+      <text x="477" y="324">Распознавание текста</text>
+    </g>
+    <path
+      d="M782 271h14m-5-5 5 5-5 5"
+      fill="none"
+      stroke="#83a58d"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <rect x="804" y="184" width="348" height="174" rx="18" fill="#176b55" />
+    <circle cx="838" cy="220" r="15" fill="#3e8572" />
+    <text x="838" y="225" fill="#fff" text-anchor="middle" font-size="14" font-weight="700">3</text>
+    <text x="865" y="227" fill="#fff" font-size="22" font-weight="600">Скачай PDF</text>
+    <path
+      d="M832 255h30l12 12v57h-42z"
+      fill="#fff"
+      opacity=".13"
+      stroke="#c5e7d9"
+      stroke-width="1.5"
+    />
+    <path d="M861 255v13h13" fill="none" stroke="#c5e7d9" stroke-width="1.5" />
+    <text x="853" y="300" fill="#fff" text-anchor="middle" font-size="13" font-weight="700">
+      PDF
+    </text>
+    <g fill="#e5f3ec" font-size="17">
+      <text x="893" y="273">Поиск и копирование</text>
+      <text x="893" y="299">Разделы и приложения</text>
+      <text x="893" y="325">Полное имя файла</text>
+    </g>
+    <circle cx="442" cy="390" r="4" fill="#42816a" />
+    <text x="457" y="396" fill="#64776d" font-size="16">Обработка на твоём компьютере</text>
+  </g>
+</svg>
