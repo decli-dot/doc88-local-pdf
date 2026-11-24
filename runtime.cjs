@@ -11,7 +11,7 @@ function dependency(name) {
   }
 }
 
-function nativeOCR() {
+function nativeOCR(language = 'eng') {
   const engine = process.env.DOC88_OCR_ENGINE || 'auto';
   if (!['auto', 'native', 'wasm'].includes(engine))
     throw new Error('DOC88_OCR_ENGINE должен быть auto, native или wasm.');
@@ -27,11 +27,17 @@ function nativeOCR() {
       windowsHide: true,
       timeout: 10000,
     });
-    if (probe.status === 0 && /^eng\s*$/m.test(probe.stdout || '')) return executable;
+    if (
+      probe.status === 0 &&
+      language
+        .split('+')
+        .every((code) => (probe.stdout || '').split(/\r?\n/).some((line) => line.trim() === code))
+    )
+      return executable;
   }
   if (engine === 'native')
     throw new Error(
-      'Не найден Tesseract с английской моделью. Установи Tesseract или выбери DOC88_OCR_ENGINE=wasm.',
+      'Не найден Tesseract с выбранной языковой моделью. Установи Tesseract или выбери DOC88_OCR_ENGINE=wasm.',
     );
   return null;
 }

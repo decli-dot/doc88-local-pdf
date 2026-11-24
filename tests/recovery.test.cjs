@@ -128,3 +128,76 @@ test('interrupted OCR reuses completed pages and repairs corrupted cached text',
     digest(second),
   );
 });
+
+test('parallel OCR cancellation commits only complete checkpoints and resumes them in page order', async (t) => {
+  const directory = await temporary(t),
+    zip = new JSZip();
+  zip.file('page1.png', await fixture('fixture-1.png'));
+  zip.file('page2.png', await fixture('fixture-2.png'));
+  await fs.writeFile(
+    path.join(directory, 'archive.zip'),
+    await zip.generateAsync({ type: 'nodebuffer' }),
+  );
+  const interrupted = job(directory, { ocrConcurrency: 2 });
+  interrupted.update = function (value) {
+    Object.assign(this, value);
+    if (value.current === 1) this.controller.abort();
+  };
+  await assert.rejects(convertArchive(interrupted));
+  assert.notEqual(interrupted.pdfReady, true);
+  assert.equal(interrupted.ocrDiagnostics.active, 0);
+  await assert.rejects(fs.access(path.join(directory, 'result.pdf')));
+  const checkpoints = (await fs.readdir(path.join(directory, 'ocr'))).filter((name) =>
+    /^page\d{5}\.json$/.test(name),
+  );
+  assert.ok(checkpoints.length >= 1 && checkpoints.length <= 2);
+  const resumed = job(directory, { ocrConcurrency: 2 });
+  await convertArchive(resumed);
+  assert.equal(resumed.reusedOCRPages, checkpoints.length);
+  assert.equal(resumed.total, 2);
+  assert.match(await fs.readFile(path.join(directory, 'ocr/page00001.txt'), 'utf8'), /24680/);
+  assert.match(await fs.readFile(path.join(directory, 'ocr/page00002.txt'), 'utf8'), /13579/);
+  assert.equal(resumed.ocrDiagnostics.status, 'done');
+  assert.equal(resumed.ocrDiagnostics.active, 0);
+});
+test('cancelling two WASM workers during initialization releases both and allows a fresh run', async (t) => {
+  const directory = await temporary(t),
+    zip = new JSZip();
+  zip.file('page1.png', await fixture('fixture-1.png'));
+  zip.file('page2.png', await fixture('fixture-2.png'));
+  await fs.writeFile(
+    path.join(directory, 'archive.zip'),
+    await zip.generateAsync({ type: 'nodebuffer' }),
+  );
+  const before = process.env.DOC88_OCR_ENGINE;
+  process.env.DOC88_OCR_ENGINE = 'wasm';
+  try {
+    let timer;
+    const interrupted = job(directory, {
+      ocrConcurrency: 2,
+      cacheDirectory: path.resolve(__dirname, '../.data/models'),
+    });
+    interrupted.update = function (value) {
+      Object.assign(this, value);
+      if (value.ocrDiagnostics?.active === 2 && !timer)
+        timer = setTimeout(() => this.controller.abort(), 20);
+    };
+    await assert.rejects(convertArchive(interrupted));
+    clearTimeout(timer);
+    assert.equal(interrupted.ocrDiagnostics.active, 0);
+    assert.notEqual(interrupted.pdfReady, true);
+    const resumed = job(directory, {
+      ocrConcurrency: 2,
+      cacheDirectory: interrupted.cacheDirectory,
+    });
+    await convertArchive(resumed);
+    assert.equal(resumed.stage, 'done');
+    assert.equal(resumed.ocrDiagnostics.peak, 2);
+    assert.equal(resumed.ocrDiagnostics.active, 0);
+    assert.match(await fs.readFile(path.join(directory, 'ocr/page00001.txt'), 'utf8'), /24680/);
+    assert.match(await fs.readFile(path.join(directory, 'ocr/page00002.txt'), 'utf8'), /13579/);
+  } finally {
+    if (before === undefined) delete process.env.DOC88_OCR_ENGINE;
+    else process.env.DOC88_OCR_ENGINE = before;
+  }
+});

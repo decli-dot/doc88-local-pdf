@@ -79,9 +79,14 @@ test('real OCR retains page images, natural order, landscape page, blank page', 
   assert.equal(job.stage, 'done');
   assert.equal(job.total, 3);
   assert.equal(job.blankPages, 1);
+  assert.equal(job.ocrQuality.pages.length, 3);
+  assert.equal(job.textlessPages.length, 1);
+  assert.ok(job.textlessPages.every((page) => page >= 1 && page <= 3));
+  assert.ok(job.ocrQuality.pages.some((page) => Number.isFinite(page.confidence)));
   assert.ok(job.textChars > 100);
   const pdf = await PDFDocument.load(await fs.readFile(path.join(directory, 'result.pdf')));
   assert.equal(pdf.getTitle(), title);
+  assert.equal(pdf.getCreator(), 'DecliPDF');
   assert.equal(job.pdfFilename, filename);
   assert.equal(pdf.getPageCount(), 3);
   const pages = pdf.getPages();
@@ -146,6 +151,7 @@ test('local API accepts ZIP, creates a downloadable searchable PDF, rejects fore
       DOC88_PORT: String(port),
       DOC88_DATA_DIR: directory,
       DOC88_OCR_ENGINE: 'wasm',
+      DECLIPDF_DEV_PASSWORD: 'fixture-password',
     },
   });
   t.after(() => child.kill());
@@ -181,7 +187,7 @@ test('local API accepts ZIP, creates a downloadable searchable PDF, rejects fore
         sourceJobId: 'missing',
       },
       origin,
-      400,
+      403,
     ],
     [{ query: 'ISO 14405-1:2025' }, 'https://evil.com', 403],
   ]) {
@@ -243,7 +249,17 @@ test('local API accepts ZIP, creates a downloadable searchable PDF, rejects fore
   assert.match(download.headers.get('content-disposition'), /filename\*=UTF-8/);
   const pdf = await PDFDocument.load(await download.arrayBuffer());
   assert.equal(pdf.getPageCount(), 1);
-  assert.equal((await fetch(origin + '/api/jobs/' + job.id + '/zip')).status, 200);
+  assert.equal((await fetch(origin + '/api/jobs/' + job.id + '/zip')).status, 403);
+  const login = await fetch(origin + '/api/dev/login', {
+    method: 'POST',
+    headers: { Origin: origin, 'x-doc88-request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'fixture-password' }),
+  });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  assert.equal(
+    (await fetch(origin + '/api/jobs/' + job.id + '/zip', { headers: { cookie } })).status,
+    200,
+  );
 
   const upload = async () =>
     fetch(origin + '/api/upload', {
@@ -287,9 +303,7 @@ test('local API accepts ZIP, creates a downloadable searchable PDF, rejects fore
 
   await t.test('cancelling an active WebAssembly recognition releases the slot', async () => {
     const started = await (await upload()).json();
-    await waitForJob(started.id, (value) =>
-      value.message.startsWith('Распознаём английский текст:'),
-    );
+    await waitForJob(started.id, (value) => value.stage === 'ocr');
     await cancel(started.id);
     const stopped = await waitForJob(started.id, (value) => value.stage === 'cancelled');
     assert.equal(stopped.pdfReady, false);

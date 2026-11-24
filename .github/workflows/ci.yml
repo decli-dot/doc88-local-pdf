@@ -19,6 +19,7 @@ jobs:
         node: [22, 24]
     env:
       DOC88_OCR_ENGINE: wasm
+      DOC88_BROWSER_CHANNEL: chromium
     steps:
       - uses: actions/checkout@v7
         with:
@@ -28,6 +29,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - run: npx playwright install --with-deps chromium
       - run: npm run check
       - run: npm run format:check
       - run: npm test

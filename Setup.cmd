@@ -1,4 +1,5 @@
 @echo off
+title DecliPDF Setup
 setlocal
 where node >nul 2>&1
 if errorlevel 1 (
@@ -15,5 +16,5 @@ if errorlevel 1 (
   exit /b 1
 )
 popd
-echo Ready. Open Start.cmd to launch Doc88 Local PDF.
+echo Ready. Open Start.cmd to launch DecliPDF.
 pause

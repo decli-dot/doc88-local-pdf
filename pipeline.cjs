@@ -1,12 +1,13 @@
 'use strict';
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
 const { dependency, nativeOCR, browserChannel } = require('./runtime.cjs');
+const { name: productName, displayText } = require('./dist/product.js');
 const { digest, inspectPages } = require('./page-check.cjs');
 const { atomicWrite, readJSON, capturePages, cachedArchive } = require('./checkpoints.cjs');
-const { prepareOCRImage } = require('./image-quality.cjs');
-const { buildStructure, normativeReferences, addPDFStructure } = require('./document-analysis.cjs');
+const { summarizeOCR, qualityPage } = require('./ocr-quality.cjs');
+const { documentText } = require('./copy-text.cjs');
+const { normativeReferences, addPDFStructure } = require('./document-analysis.cjs');
 const JSZip = dependency('jszip');
 const { PDFDocument } = dependency('pdf-lib');
 const native = nativeOCR();
@@ -18,30 +19,12 @@ function checkAbort(job) {
   if (job.controller.signal.aborted) throw new Error('Обработка остановлена.');
 }
 
-function abortable(promise, signal) {
-  return new Promise((resolve, reject) => {
-    const cancel = () => reject(new Error('Обработка остановлена.'));
-    signal.addEventListener('abort', cancel, { once: true });
-    Promise.resolve(promise).then(
-      (value) => {
-        signal.removeEventListener('abort', cancel);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener('abort', cancel);
-        reject(error);
-      },
-    );
-    if (signal.aborted) cancel();
-  });
-}
-
 function validateURL(value) {
   let url;
   try {
     url = new URL(value);
   } catch {
-    throw new Error('Вставь ссылку на документ doc88.com.');
+    throw new Error('Вставь ссылку на документ или найди его по обозначению.');
   }
   if (
     !['https:', 'http:'].includes(url.protocol) ||
@@ -51,7 +34,7 @@ function validateURL(value) {
     url.password ||
     !/^\/p-\d+\.html$/.test(url.pathname)
   ) {
-    throw new Error('Нужна ссылка вида https://www.doc88.com/p-123456789.html');
+    throw new Error('Не удалось распознать ссылку. Попробуй найти документ по его обозначению.');
   }
   url.protocol = 'https:';
   url.search = '';
@@ -74,7 +57,7 @@ function validateRange(from, to) {
 
 function cleanName(value) {
   return (
-    String(value || 'document')
+    displayText(value || 'document')
       .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
       .replace(/[. ]+$/g, '')
       .slice(0, 100) || 'document'
@@ -105,7 +88,8 @@ async function downloadArchive(job, dataDir, options = {}) {
   job.controller.signal.addEventListener('abort', closeOnAbort, { once: true });
   let challengeError = null;
   let challengeView = null;
-  let watchingChallenge = false;
+  let challengeWatchTask = null;
+  const challengeController = new AbortController();
   let challengeTimer = null;
   let challengeWatchStopped = false;
   try {
@@ -115,7 +99,7 @@ async function downloadArchive(job, dataDir, options = {}) {
     page.on('dialog', async (dialog) => {
       if (options.rejectChallenges) {
         challengeError = new Error(
-          'Doc88 запросил капчу или ручное подтверждение чтения. Автоматическая облачная загрузка остановлена.',
+          'Требуется ручное подтверждение доступа. Автоматическая облачная загрузка остановлена.',
         );
         job.update({ stage: 'challenge', message: challengeError.message });
         await dialog.dismiss().catch(() => {});
@@ -125,8 +109,8 @@ async function downloadArchive(job, dataDir, options = {}) {
       job.update({
         stage: 'waiting',
         message: options.inlineChallenge
-          ? 'Doc88 просит подтверждение. Выполни его в панели справа.'
-          : 'Doc88 просит подтверждение. Реши капчу или подтверди чтение в открытом окне.',
+          ? 'Требуется подтверждение доступа. Выполни проверку в панели рядом.'
+          : 'Требуется подтверждение доступа. Выполни проверку в открытом окне.',
       });
       await dialog.dismiss().catch(() => {});
     });
@@ -146,9 +130,9 @@ async function downloadArchive(job, dataDir, options = {}) {
     });
     const response = await page.goto(job.url, { waitUntil: 'domcontentloaded', timeout: 90000 });
     if (options.rejectChallenges && response && response.status() >= 400)
-      throw new Error(`Doc88 вернул HTTP ${response.status()}.`);
+      throw new Error(`Не удалось открыть документ: HTTP ${response.status()}.`);
     if (!['doc88.com', 'www.doc88.com'].includes(new URL(page.url()).hostname))
-      throw new Error('Doc88 перенаправил на другую страницу.');
+      throw new Error('Документ перенаправляет на неподдерживаемую страницу.');
     await page.waitForSelector('#pageNumInput', { state: 'attached', timeout: 90000 });
     const upstream = await fs.readFile(path.join(__dirname, 'vendor/downloadPages.js'), 'utf8');
     // Doc88 replaces window.Map with a legacy class, breaking Playwright's
@@ -170,37 +154,54 @@ async function downloadArchive(job, dataDir, options = {}) {
       return result.result.value;
     };
     if (options.inlineChallenge) {
-      const { createChallengeView, visibleChallenge } = require('./challenge-view.cjs');
+      const {
+        createChallengeView,
+        visibleChallenge,
+        allowedDocument,
+      } = require('./challenge-view.cjs');
       challengeView = createChallengeView({ page, cdp, evaluate: evaluateConsole });
       options.onBrowserView?.(challengeView);
       const watch = async () => {
         if (
           challengeWatchStopped ||
-          watchingChallenge ||
+          challengeWatchTask ||
           job.controller.signal.aborted ||
           page.isClosed()
         )
           return;
-        watchingChallenge = true;
-        try {
+        challengeWatchTask = (async () => {
           const visible = Boolean(await evaluateConsole(visibleChallenge));
           if (challengeWatchStopped) return;
+          if (visible && options.tryCaptcha && !job.challengeAvailable) {
+            const handled = await options.tryCaptcha({
+              page,
+              cdp,
+              evaluate: evaluateConsole,
+              allowed: (value) =>
+                allowedDocument(value) && new URL(value).pathname === new URL(job.url).pathname,
+              signal: challengeController.signal,
+            });
+            if (challengeWatchStopped || handled) return;
+          }
           if (visible !== Boolean(job.challengeAvailable)) {
             job.update({
               challengeAvailable: visible,
               ...(visible
                 ? {
                     stage: 'waiting',
-                    message: 'Doc88 просит подтверждение. Передвинь ползунок в панели справа.',
+                    message: 'Подтверди доступ: передвинь ползунок в панели рядом.',
                   }
                 : {}),
             });
             if (!visible) await challengeView.reset();
           }
-        } catch {
+        })().catch(() => {
           /* The page can navigate or close while a check is pending. */
+        });
+        try {
+          await challengeWatchTask;
         } finally {
-          watchingChallenge = false;
+          challengeWatchTask = null;
         }
       };
       await watch();
@@ -221,7 +222,7 @@ async function downloadArchive(job, dataDir, options = {}) {
       return { count: getPageCount(), title: getDocumentTitle() || document.title };\n})()`,
     );
     if (!Number.isSafeInteger(info.count) || info.count < 1)
-      throw new Error('Doc88 не сообщил число страниц.');
+      throw new Error('Не удалось определить число страниц документа.');
     const end = job.toPage ?? info.count;
     if (job.fromPage > end || end > info.count)
       throw new Error(`В документе ${info.count} страниц. Проверь диапазон.`);
@@ -248,20 +249,18 @@ async function downloadArchive(job, dataDir, options = {}) {
       );
       if (captcha) {
         if (options.rejectChallenges)
-          throw new Error(
-            'Doc88 запросил капчу до первой страницы. Требуется ручное подтверждение в окне Doc88.',
-          );
+          throw new Error('Перед загрузкой страниц требуется ручное подтверждение доступа.');
         if (!waitingForCaptcha) {
           waitingForCaptcha = true;
           job.update({
             stage: 'waiting',
             message: options.inlineChallenge
-              ? 'Doc88 показывает проверку перед первой страницей. Пройди её в панели справа.'
-              : 'Doc88 показывает ползунок проверки перед первой страницей. Пройди проверку в открытом окне документа.',
+              ? 'Подтверди доступ к страницам в панели рядом.'
+              : 'Подтверди доступ в открытом окне документа.',
           });
         }
         if (Date.now() >= manualDeadline)
-          throw new Error('Истекло время ожидания подтверждения Doc88. Попробуй снова.');
+          throw new Error('Истекло время ожидания подтверждения доступа. Попробуй снова.');
         await new Promise((resolve) => setTimeout(resolve, 250));
         continue;
       }
@@ -272,12 +271,12 @@ async function downloadArchive(job, dataDir, options = {}) {
       }
       if (Date.now() >= rendererDeadline)
         throw new Error(
-          'Doc88 не загрузил страницы документа. Проверь открытое окно и повтори попытку.',
+          'Не удалось загрузить страницы документа. Проверь подтверждение доступа и повтори попытку.',
         );
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
     // Reuse the upstream page renderer/capture functions, checkpoint each image
-    // locally, then assemble the ZIP locally. Manual challenges are unchanged.
+    // locally, then assemble the ZIP locally. Unsupported challenges retain the manual relay.
     let running = true;
     const watchdog = setTimeout(
       () => {
@@ -310,6 +309,8 @@ async function downloadArchive(job, dataDir, options = {}) {
   } finally {
     challengeWatchStopped = true;
     clearInterval(challengeTimer);
+    challengeController.abort();
+    await challengeWatchTask?.catch(() => {});
     await challengeView?.close().catch(() => {});
     options.onBrowserView?.(null);
     if (job.challengeAvailable) job.update({ challengeAvailable: false });
@@ -369,211 +370,108 @@ async function unpackArchive(job) {
   return images;
 }
 
-async function runNative(job, image, outputBase) {
+async function convertArchive(job) {
+  const language = require('./dist/ocr-language.js').resolve(
+    job.query,
+    job.ocrLanguage,
+    job.documentLanguage,
+  );
+  const native = nativeOCR(language);
+  const images = await unpackArchive(job);
+  if (job.enforceScript) {
+    job.update({ stage: 'checking', message: 'Проверяем письменность исходных страниц…' });
+    const proof = await require('./script-check.cjs').inspectScripts(job, images);
+    job.update({ scriptVerification: proof });
+    if (proof.status === 'failed')
+      throw Object.assign(Error(proof.message), { code: 'FOREIGN_SCRIPT', verification: proof });
+  }
+  const records = await require('./ocr-pages.cjs').recognizePages(job, images, language, native);
   checkAbort(job);
-  await new Promise((resolve, reject) => {
-    const child = spawn(
-      native,
-      [image, outputBase, '-l', 'eng', '--dpi', '150', '--psm', '3', 'pdf', 'txt'],
-      {
-        windowsHide: true,
-        stdio: ['ignore', 'ignore', 'pipe'],
-        signal: job.controller.signal,
-      },
-    );
-    let errorText = '';
-    child.stderr.on('data', (bytes) => {
-      errorText = (errorText + bytes.toString('utf8')).slice(-4000);
+  const pdf = await PDFDocument.create();
+  pdf.setTitle(displayText(job.title));
+  pdf.setCreator(productName);
+  const texts = [],
+    hashes = [],
+    enhancements = [],
+    qualityPages = [];
+  let textChars = 0,
+    blankPages = 0;
+  const enhanceImages = job.enhanceImages !== false;
+  const pdfOptimization = {
+    version: 1,
+    lossless: true,
+    images: 0,
+    compressedImages: 0,
+    imageBytesBefore: 0,
+    imageBytesAfter: 0,
+  };
+  job.update({ stage: 'merging', message: 'Собираем итоговый PDF…' });
+  for (const [index, record] of records.entries()) {
+    checkAbort(job);
+    const source = await PDFDocument.load(await fs.readFile(record.base + '.pdf'), {
+      parseSpeed: 1500,
+      updateMetadata: false,
     });
-    child.on('error', reject);
-    child.on('close', (code) =>
-      code === 0
-        ? resolve()
-        : reject(new Error(`OCR страницы не завершился: ${errorText.trim() || `код ${code}`}`)),
-    );
+    const [page] = await pdf.copyPages(source, [0]);
+    if (record.enhancement.enhanced) {
+      page.scale(1 / record.enhancement.scaleX, 1 / record.enhancement.scaleY);
+      enhancements.push({ page: index + 1, ...record.enhancement });
+    }
+    pdf.addPage(page);
+    texts.push(record.text);
+    hashes.push(record.imageHash);
+    textChars += record.text.trim().length;
+    if (!record.text.trim()) blankPages++;
+    qualityPages.push(qualityPage(index + 1, record.text, record.confidence));
+    for (const field of ['images', 'compressedImages', 'imageBytesBefore', 'imageBytesAfter'])
+      pdfOptimization[field] += record.optimization?.[field] || 0;
+  }
+  const pageIntegrity = inspectPages(texts, hashes, job.officialPages);
+  const documentStructure = await require('./pdf-structure.cjs').structureFromPDF(
+    await pdf.save({ objectsPerTick: 1500 }),
+    texts,
+    {
+      signal: job.controller.signal,
+      language,
+      cacheDirectory: path.join(job.directory, 'structure-cache'),
+      modelsDirectory: job.cacheDirectory,
+      onWarning: (message) => job.log?.(message),
+    },
+  );
+  const references = normativeReferences(texts);
+  addPDFStructure(pdf, documentStructure);
+  job.update({ stage: 'merging', message: 'Собираем итоговый PDF…' });
+  checkAbort(job);
+  const bytes = await pdf.save({ objectsPerTick: 1500 });
+  const verified = await PDFDocument.load(bytes, { parseSpeed: 1500 });
+  if (verified.getPageCount() !== images.length)
+    throw new Error('В итоговом PDF не хватает страниц.');
+  checkAbort(job);
+  const temporary = path.join(job.directory, 'result.tmp');
+  await fs.writeFile(temporary, bytes);
+  checkAbort(job);
+  await fs.rename(temporary, path.join(job.directory, 'result.pdf'));
+  await atomicWrite(path.join(job.directory, 'copy-text.txt'), documentText(texts));
+  job.update({
+    stage: 'done',
+    message: 'PDF готов. Можно скачать и искать текст.',
+    current: images.length,
+    pdfReady: true,
+    pdfFilename: job.officialFilename || cleanName(job.title) + '_OCR.pdf',
+    bytes: bytes.length,
+    textChars,
+    copyTextReady: true,
+    blankPages,
+    textlessPages: texts.flatMap((text, i) => (text.trim() ? [] : [i + 1])),
+    ocrQuality: summarizeOCR(qualityPages),
+    pageIntegrity,
+    documentStructure,
+    normativeReferences: references,
+    pdfOptimization,
+    imageEnhancement: { enabled: enhanceImages, pages: enhancements, count: enhancements.length },
+    finishedAt: new Date().toISOString(),
   });
 }
-
-async function convertArchive(job) {
-  const images = await unpackArchive(job);
-  const pdf = await PDFDocument.create();
-  pdf.setTitle(job.title);
-  pdf.setCreator('Doc88 Local PDF');
-  const pagesDir = path.join(job.directory, 'ocr');
-  await fs.mkdir(pagesDir, { recursive: true });
-  let worker = null;
-  let textChars = 0;
-  let blankPages = 0;
-  let reusedOCRPages = 0;
-  const texts = [],
-    hashes = [];
-  const enhancements = [];
-  const enhanceImages = job.enhanceImages !== false;
-  const engine =
-    (native ? 'native' : 'wasm') + '-eng-psm3-150-v2-' + (enhanceImages ? 'enhance1' : 'original');
-  const stopWorker = () => {
-    if (worker) worker.terminate().catch(() => {});
-  };
-  try {
-    const ensureWorker = async () => {
-      if (native || worker) return;
-      job.update({ stage: 'ocr', message: 'Загружаем английскую модель OCR для первого запуска…' });
-      const Tesseract = dependency('tesseract.js');
-      const cachePath =
-        process.env.DOC88_OCR_CACHE || job.cacheDirectory || path.join(job.directory, 'models');
-      await fs.mkdir(cachePath, { recursive: true });
-      const pendingWorker = Tesseract.createWorker('eng', 1, {
-        cachePath,
-        errorHandler: (error) => {
-          job.log(`OCR: ${String(error).slice(0, 200)}`);
-        },
-      }).then(async (ready) => {
-        if (job.controller.signal.aborted) {
-          await ready.terminate();
-          throw new Error('Обработка остановлена.');
-        }
-        return ready;
-      });
-      worker = await abortable(pendingWorker, job.controller.signal);
-      job.controller.signal.addEventListener('abort', stopWorker, { once: true });
-      checkAbort(job);
-      await abortable(
-        worker.setParameters({ tessedit_pageseg_mode: '3', user_defined_dpi: '150' }),
-        job.controller.signal,
-      );
-    };
-    for (let i = 0; i < images.length; i++) {
-      checkAbort(job);
-      job.update({
-        stage: 'ocr',
-        current: i,
-        message: `Распознаём английский текст: страница ${i + 1} из ${images.length}`,
-      });
-      let pagePDF,
-        text,
-        reused = false;
-      let enhancement = { scaleX: 1, scaleY: 1, enhanced: false };
-      const base = path.join(pagesDir, `page${String(i + 1).padStart(5, '0')}`);
-      const imageHash = digest(await fs.readFile(images[i]));
-      hashes.push(imageHash);
-      const record = await readJSON(base + '.json');
-      if (record?.imageHash === imageHash && record.engine === engine) {
-        try {
-          const [cachedPDF, cachedText] = await Promise.all([
-            fs.readFile(base + '.pdf'),
-            fs.readFile(base + '.txt', 'utf8'),
-          ]);
-          if (
-            digest(cachedPDF) === record.pdfHash &&
-            digest(cachedText) === record.textHash &&
-            (await PDFDocument.load(cachedPDF)).getPageCount() === 1
-          ) {
-            pagePDF = cachedPDF;
-            text = cachedText;
-            reusedOCRPages++;
-            reused = true;
-            enhancement = record.enhancement || enhancement;
-          }
-        } catch {
-          /* Damaged page caches are recognized again. */
-        }
-      }
-      let ocrImage = images[i];
-      if (!pagePDF) {
-        const prepared = await prepareOCRImage(images[i], base + '.enhanced.png', enhanceImages);
-        const { path: preparedPath, ...info } = prepared;
-        ocrImage = preparedPath;
-        enhancement = info;
-        checkAbort(job);
-      }
-      if (!pagePDF && native) {
-        await runNative(job, ocrImage, base + '.work');
-        [pagePDF, text] = await Promise.all([
-          fs.readFile(base + '.work.pdf'),
-          fs.readFile(base + '.work.txt', 'utf8'),
-        ]);
-      } else if (!pagePDF) {
-        await ensureWorker();
-        job.update({
-          stage: 'ocr',
-          message: `Распознаём английский текст: страница ${i + 1} из ${images.length}`,
-        });
-        const { data } = await abortable(
-          worker.recognize(ocrImage, { pdfTextOnly: false }, { text: true, pdf: true }),
-          job.controller.signal,
-        );
-        pagePDF = data.pdf;
-        text = data.text || '';
-      }
-      checkAbort(job);
-      const source = await PDFDocument.load(pagePDF);
-      if (source.getPageCount() !== 1)
-        throw new Error(`Неожиданное число страниц в результате OCR страницы ${i + 1}.`);
-      if (!reused) {
-        await atomicWrite(base + '.pdf', pagePDF);
-        await atomicWrite(base + '.txt', text);
-        await atomicWrite(
-          base + '.json',
-          JSON.stringify({
-            imageHash,
-            engine,
-            pdfHash: digest(pagePDF),
-            textHash: digest(text),
-            enhancement,
-          }),
-        );
-        if (native)
-          await Promise.all(
-            ['.work.pdf', '.work.txt'].map((extension) => fs.rm(base + extension, { force: true })),
-          );
-      }
-      const pages = await pdf.copyPages(source, [0]);
-      if (enhancement.enhanced) {
-        pages[0].scale(1 / enhancement.scaleX, 1 / enhancement.scaleY);
-        enhancements.push({ page: i + 1, ...enhancement });
-      }
-      pdf.addPage(pages[0]);
-      textChars += text.trim().length;
-      if (!text.trim()) blankPages++;
-      texts.push(text);
-      job.update({ current: i + 1, reusedOCRPages });
-    }
-    const pageIntegrity = inspectPages(texts, hashes, job.officialPages);
-    const documentStructure = buildStructure(texts);
-    const references = normativeReferences(texts);
-    addPDFStructure(pdf, documentStructure);
-    job.update({ stage: 'merging', message: 'Собираем итоговый PDF…' });
-    checkAbort(job);
-    const bytes = await pdf.save();
-    const verified = await PDFDocument.load(bytes);
-    if (verified.getPageCount() !== images.length)
-      throw new Error('В итоговом PDF не хватает страниц.');
-    checkAbort(job);
-    const temporary = path.join(job.directory, 'result.tmp');
-    await fs.writeFile(temporary, bytes);
-    checkAbort(job);
-    await fs.rename(temporary, path.join(job.directory, 'result.pdf'));
-    job.update({
-      stage: 'done',
-      message: 'PDF готов. Можно скачать и искать текст.',
-      current: images.length,
-      pdfReady: true,
-      pdfFilename: job.officialFilename || cleanName(job.title) + '_OCR.pdf',
-      bytes: bytes.length,
-      textChars,
-      blankPages,
-      pageIntegrity,
-      documentStructure,
-      normativeReferences: references,
-      imageEnhancement: { enabled: enhanceImages, pages: enhancements, count: enhancements.length },
-      finishedAt: new Date().toISOString(),
-    });
-  } finally {
-    job.controller.signal.removeEventListener('abort', stopWorker);
-    if (worker) await worker.terminate().catch(() => {});
-  }
-}
-
 module.exports = {
   validateURL,
   validateRange,

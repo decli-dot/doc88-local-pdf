@@ -2,7 +2,7 @@
   "name": "doc88-local-pdf",
   "version": "1.9.0",
   "private": true,
-  "description": "Local Doc88 image archive downloader and searchable PDF converter",
+  "description": "DecliPDF — local standards search and searchable PDF preparation",
   "license": "MIT",
   "author": "decli-dot",
   "repository": {
@@ -30,15 +30,19 @@
     "package": "node scripts/package.cjs",
     "build:web": "node scripts/build-web.cjs",
     "preview:web": "node scripts/preview-web.cjs",
-    "test:extension": "node scripts/test-extension.cjs"
+    "test:interface": "node scripts/test-interface.cjs",
+    "test:extension": "node scripts/test-extension.cjs",
+    "experiment:direct": "node scripts/experiment-direct.cjs"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
+    "@napi-rs/canvas": "0.1.88",
     "franc-min": "6.2.0",
     "jszip": "3.10.2",
     "pdf-lib": "1.17.1",
+    "pdfjs-dist": "5.4.624",
     "playwright": "1.64.0",
     "sharp": "0.35.5",
     "tesseract.js": "7.0.0"

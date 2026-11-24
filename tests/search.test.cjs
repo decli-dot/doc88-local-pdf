@@ -7,7 +7,10 @@ const { ISOEditionNotFoundError, reference } = require('../iso-catalog.cjs');
 const {
   validateQuery,
   titleMatches,
+  exactTitleMatches,
   parseResults,
+  searchDocumentPages,
+  searchAllDocuments,
   analyseTextPages,
   identityCheck,
   isoExtentCheck,
@@ -31,8 +34,8 @@ test('ISO input formatting preserves the specified year and part before catalogu
     assert.equal(validateQuery(value), 'ISO 129-1:2015');
   assert.equal(validateQuery('iso / iec 27001-2022'), 'ISO/IEC 27001:2022');
   assert.equal(validateQuery('iso5458'), 'ISO 5458');
+  assert.equal(validateQuery('BS EN ISO 5458-2013'), 'BS EN ISO 5458:2013');
   for (const value of [
-    'BS EN ISO 5458-2013',
     'ISO 5458:2018/Amd 1:2020',
     'ISO 5458 20130',
     'An English handbook',
@@ -41,22 +44,28 @@ test('ISO input formatting preserves the specified year and part before catalogu
     assert.equal(validateQuery(value), value);
 });
 
-test('search keeps the requested ISO part and year, removes drafts and unsafe links', () => {
+test('search keeps the ISO part and publisher, leaves year checks to OCR, removes drafts and unsafe links', () => {
   assert.equal(validateQuery(' ISO  14405-1:2025 '), 'ISO 14405-1:2025');
   for (const input of [null, {}, 'ab', 'x'.repeat(181)]) assert.throws(() => validateQuery(input));
-  for (const title of ['ISO14405-1-2025', 'ISO 14405-1 2025', '（高清）ISO 14405-1:2025'])
+  for (const title of [
+    'ISO14405-1-2025',
+    'ISO 14405-1 2025',
+    '（高清）ISO 14405-1:2025',
+    'ISO 14405-1:2016',
+    'ISO 14405-1',
+    'ISO 14405-1:20250',
+  ])
     assert.ok(titleMatches('ISO 14405-1:2025', title));
   for (const title of [
-    'ISO 14405-1:2016',
     'ISO 14405-2:2025',
     'ISO/DIS 14405-1:2025',
     'ISO/IEC 14405-1:2025',
-    'ISO 14405-1',
-    'ISO 14405-1:20250',
     'EN ISO 14405-1:2025',
     'BS EN ISO 14405-1:2025',
     'DIN EN ISO 14405-1:2025',
     'NF EN ISO 14405-1:2025',
+    '可编辑word原版标准_BS ISO 14405-1:2025',
+    '标准BS EN ISO 14405-1:2025',
   ])
     assert.equal(Boolean(titleMatches('ISO 14405-1:2025', title)), false);
   const item = (title, url, format) =>
@@ -73,7 +82,11 @@ test('search keeps the requested ISO part and year, removes drafts and unsafe li
   const results = parseResults(html, 'ISO 14405-1:2025');
   assert.deepEqual(
     results.map((item) => item.url),
-    ['https://www.doc88.com/p-4.html', 'https://www.doc88.com/p-1.html'],
+    [
+      'https://www.doc88.com/p-2.html',
+      'https://www.doc88.com/p-4.html',
+      'https://www.doc88.com/p-1.html',
+    ],
   );
   assert.equal(results[0].pageCount, 64);
   assert.equal(results[0].checks, null);
@@ -96,11 +109,29 @@ test('language checks actual prose, rejects French and ignores repeated English 
     (await analyseTextPages([1, 2, 3, 4].map((n) => french + `\n${n}\n` + footer))).status,
     'passed',
   );
-  assert.equal(identityCheck('ISO 14405-1:2025', ['ISO 14405-1:2016', english]).status, 'unknown');
+  assert.equal(identityCheck('ISO 14405-1:2025', ['ISO 14405-1:2016', english]).status, 'failed');
   assert.equal(
     identityCheck('ISO 14405-1:2025', ['ISO 14405-1:2025(E)', english]).status,
     'passed',
   );
+});
+
+test('explicit machine-translation notices cannot turn translated prose into an official language match', async () => {
+  for (const notice of [
+    'Machine Translated by Google',
+    'Machine translated by DeepL',
+    'Translated by Google Translate',
+  ]) {
+    const result = await analyseTextPages([notice + '\n' + english, notice + '\n' + english]);
+    assert.equal(result.status, 'failed');
+    assert.equal(result.machineTranslation, true);
+    assert.match(result.message, /автоматический перевод/);
+  }
+  const plain = await analyseTextPages([
+    english + '\nThis clause describes a machine translated by Google in an example.',
+  ]);
+  assert.equal(plain.status, 'passed');
+  assert.equal(plain.machineTranslation, false);
 });
 
 async function fixture(t) {
@@ -257,7 +288,7 @@ test('yearless ISO lookup narrows Doc88 search and content verification to the o
       },
     }),
   );
-  assert.equal(retry.searchResults[0].checks.identity.status, 'unknown');
+  assert.equal(retry.searchResults[0].checks.identity.status, 'failed');
   assert.equal(Boolean(retry.pdfReady), false);
 });
 test('explicit years are preserved when retrieving titles, and ISO failure never picks an arbitrary year', async (t) => {
@@ -284,7 +315,7 @@ test('explicit years are preserved when retrieving titles, and ISO failure never
           return [];
         },
       }),
-      /На Doc88 не найдено/,
+      { code: 'SEARCH_EXHAUSTED' },
     );
     assert.equal(job.isoEdition?.reference, query.startsWith('ISO') ? 'ISO 5458:1998' : undefined);
   }
@@ -341,7 +372,7 @@ test('legacy candidates without a resolved year are checked against ISO before r
         downloaded = true;
       },
     }),
-    /не соответствует ISO 5458:2018/,
+    { code: 'SEARCH_EXHAUSTED' },
   );
   assert.equal(lookedUp, true);
   assert.equal(downloaded, false);
@@ -491,7 +522,7 @@ test('a selected earlier designation drives the exact Doc88 query', async (t) =>
         return [];
       },
     }),
-    /На Doc88 не найдено/,
+    { code: 'SEARCH_EXHAUSTED' },
   );
   assert.equal(actual, 'ISO 2595:1973');
   assert.equal(job.query, 'ISO 129-1:2015');
@@ -548,6 +579,7 @@ test('page integrity failures reject an upload while uncertain OCR remains a vis
 
 test('search recovery reuses saved candidates and skips already rejected uploads', async (t) => {
   const job = await fixture(t);
+  job.searchVersion = 4;
   job.searchResults = [
     { ...candidate('https://www.doc88.com/p-1.html'), status: 'rejected' },
     { ...candidate('https://www.doc88.com/p-2.html'), status: 'cancelled' },
@@ -583,7 +615,8 @@ test('uncertain English OCR keeps the PDF available with a review note', async (
 });
 
 test('main standard and amendment search titles and cover identities cannot substitute for one another', () => {
-  assert.equal(Boolean(titleMatches('ISO 129-1:2018', 'ISO 129-1:2018/Amd 1:2020')), false);
+  assert.equal(Boolean(titleMatches('ISO 129-1:2018', 'ISO 129-1:2018/Amd 1:2020')), true);
+  assert.equal(identityCheck('ISO 129-1:2018', ['ISO 129-1:2018/Amd 1:2020(E)']).status, 'failed');
   assert.equal(
     Boolean(titleMatches('ISO 129-1:2018/Amd 1:2020', 'ISO 129-1 2018 AMD 1 2020')),
     true,
@@ -593,4 +626,446 @@ test('main standard and amendment search titles and cover identities cannot subs
     identityCheck('ISO 129-1:2018/Amd 1:2020', ['ISO 129-1:2018/Amd 1:2020(E)']).status,
     'passed',
   );
+});
+
+test('preview rejects wrong language before full download, then continues past the first three candidates', async (t) => {
+  const job = await fixture(t),
+    first = [1, 2, 3].map((n) => candidate(`https://www.doc88.com/p-${n}.html`)),
+    fourth = candidate('https://www.doc88.com/p-4.html');
+  const downloads = [],
+    previews = [];
+  async function* pages() {
+    yield [fourth];
+  }
+  await runSearchJob(job, job.directory, {
+    candidates: first,
+    _searchIterator: pages(),
+    preview: async (child) => {
+      previews.push(child.url);
+      if (!child.url.endsWith('p-4.html'))
+        throw Object.assign(Error('Wrong language'), { code: 'FOREIGN_LANGUAGE' });
+      return { language: { status: 'passed' } };
+    },
+    download: async (child) => {
+      downloads.push(child.url);
+      await fs.writeFile(path.join(child.directory, 'archive.zip'), 'PK-test');
+    },
+    convert: convertFixture,
+  });
+  assert.equal(job.stage, 'done');
+  assert.equal(previews.length, 4);
+  assert.equal(job.previewDiagnostics.total, 4);
+  assert.equal(job.previewDiagnostics.completed, 4);
+  assert.equal(job.previewDiagnostics.peak, 3);
+  assert.deepEqual(downloads, [fourth.url]);
+  assert.equal(job.searchResults.length, 4);
+  assert.ok(first.every((item) => item.checks.language.status === 'failed'));
+});
+
+test('punctuation and translated-title hints do not reject candidate discovery or replace page verification', () => {
+  for (const title of [
+    '(正版) ISO17450-4-2017.',
+    '(精品) ISO17450_4_2017',
+    '专业AI译中文版 ISO17450-4-2017',
+  ])
+    assert.equal(titleMatches('ISO 17450-4:2017', title), true);
+  for (const title of ['ISO17450-40:2017', 'ISO17450-5:2017', 'ISO174500-4:2017'])
+    assert.equal(titleMatches('ISO 17450-4:2017', title), false);
+  assert.equal(
+    titleMatches('ASME Y14.6-2001 (R2025)', '专业AI译中文版 ASME Y14.6-2001(R2025)'),
+    true,
+  );
+});
+
+function sourcePage(page, items, next = null) {
+  return (
+    '<span id="pageResult"></span>' +
+    items
+      .map(
+        ({ title, id, pages = 2 }) =>
+          `<div class="sd-list-con"><a class="sd-title" title="${title}" href="https://www.doc88.com/p-${id}.html">${title}</a>页数：${pages} 格式：PDF</div>`,
+      )
+      .join('') +
+    `<div id="page"><a href="javascript:;"><span class="pa current">${page}</span></a>` +
+    (page > 1 ? `<a onclick="Search.searchPage('p=${page - 1}');">Previous</a>` : '') +
+    (next ? `<a onclick="Search.searchPage('p=${next}');">Next</a>` : '') +
+    '</div>'
+  );
+}
+
+test('short, empty and duplicate source pages still follow explicit pagination, across query variants', async () => {
+  const calls = [];
+  const excluded = { title: 'DIN EN ISO 129-1:2022', id: 10 };
+  const rows = await searchAllDocuments('ISO 129-1:2018', new AbortController().signal, () => {}, {
+    fetcher: async (value) => {
+      const address = new URL(value),
+        q = address.searchParams.get('q'),
+        page = Number(address.searchParams.get('p'));
+      calls.push([q, page]);
+      if (q !== 'ISO 129-1 2018')
+        return new Response(sourcePage(1, [{ title: 'ISO129-1-2018', id: 15, pages: 68 }]));
+      const items =
+        page <= 2 ? [excluded] : page <= 4 ? [] : [{ title: 'ISO 129-1 2018', id: 14, pages: 68 }];
+      return new Response(sourcePage(page, items, page < 5 ? page + 1 : null));
+    },
+  });
+  assert.deepEqual(
+    calls.filter(([q]) => q === 'ISO 129-1 2018').map(([, p]) => p),
+    [1, 2, 3, 4, 5],
+  );
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((row) => row.pageCount === 68));
+  assert.ok(calls.some(([q]) => q === 'ISO129-1'));
+});
+
+test('search continues after a short rejected upload and wrong-language candidate, then stops at a verified PDF', async (t) => {
+  const job = await fixture(t),
+    calls = [],
+    downloaded = [];
+  const iterator = searchDocumentPages(job.query, job.controller.signal, job.log, {
+    fetcher: async (value) => {
+      const page = Number(new URL(value).searchParams.get('p'));
+      calls.push(page);
+      assert.ok(page <= 4, 'verified PDF must stop further discovery');
+      const items =
+        page === 2
+          ? [{ title: 'DIN EN ISO 14405-1:2025', id: 2 }]
+          : [{ title: 'ISO 14405-1 2025', id: page, pages: page === 1 ? 1 : 2 }];
+      return new Response(sourcePage(page, items, page + 1));
+    },
+  });
+  await runSearchJob(job, job.directory, {
+    _searchIterator: iterator,
+    download: async (child) => {
+      downloaded.push(child.url);
+      await fs.writeFile(path.join(child.directory, 'archive.zip'), 'PK-test');
+    },
+    convert: (child) => convertFixture(child, child.url.endsWith('p-3.html') ? french : english),
+  });
+  assert.deepEqual(calls, [1, 2, 3, 4]);
+  assert.deepEqual(downloaded, [
+    'https://www.doc88.com/p-3.html',
+    'https://www.doc88.com/p-4.html',
+  ]);
+  assert.equal(job.searchResults[0].checks.extent.status, 'failed');
+  assert.equal(job.searchResults[1].checks.language.status, 'failed');
+  assert.equal(job.stage, 'done');
+  assert.equal(job.pdfReady, true);
+  assert.equal(job.url, 'https://www.doc88.com/p-4.html');
+});
+
+test('pagination does not mistake a wrong page, fetch failure or safety limit for exhausted search', async () => {
+  const run = (fetcher) =>
+    searchAllDocuments('ISO 129-1:2018', new AbortController().signal, () => {}, {
+      fetcher,
+      maxPages: 2,
+    });
+  await assert.rejects(
+    run(async () => new Response(sourcePage(1, [], 2))),
+    /другую страницу/,
+  );
+  await assert.rejects(
+    run(async () => new Response('', { status: 503 })),
+    /HTTP 503/,
+  );
+  await assert.rejects(
+    run(async (value) => {
+      const page = Number(new URL(value).searchParams.get('p'));
+      return new Response(sourcePage(page, [], page + 1));
+    }),
+    /Поиск ещё не завершён/,
+  );
+  const controller = new AbortController();
+  const iterator = searchDocumentPages('ISO 129-1:2018', controller.signal, () => {}, {
+    fetcher: async () => new Response(sourcePage(1, [{ title: 'ISO 129-1:2018', id: 1 }], 2)),
+  });
+  await iterator.next();
+  controller.abort();
+  await assert.rejects(iterator.next(), /abort/i);
+});
+
+test('exhausted rejected candidates and unfinished technical checks have different outcomes', async (t) => {
+  const exhausted = await fixture(t);
+  await assert.rejects(
+    runSearchJob(exhausted, exhausted.directory, {
+      candidates: [candidate('https://www.doc88.com/p-1.html', 1)],
+      download: async () => {
+        throw Error('short uploads must not be downloaded');
+      },
+    }),
+    { code: 'SEARCH_EXHAUSTED' },
+  );
+  const unfinished = await fixture(t);
+  await assert.rejects(
+    runSearchJob(unfinished, unfinished.directory, {
+      candidates: [candidate('https://www.doc88.com/p-2.html')],
+      download: async () => {
+        throw Error('connection interrupted');
+      },
+    }),
+    { code: 'SEARCH_INCOMPLETE' },
+  );
+  assert.equal(unfinished.searchResults[0].status, 'error');
+  assert.equal(Boolean(unfinished.pdfReady), false);
+});
+
+test('precise discovery requires the requested publisher, part and edition year before broader OCR verification', () => {
+  for (const title of [
+    'ISO 129-1:2018',
+    '（高清）ISO129-1-2018 Technical product documentation',
+    'ISO 129-1 2018',
+  ])
+    assert.equal(exactTitleMatches('ISO 129-1:2018', title), true, title);
+  for (const title of [
+    'ISO129-1-2004',
+    'ISO 129-1',
+    'ISO 129-1:20180',
+    'ISO 129-2:2018',
+    'BS ISO 129-1:2018',
+    'DIN EN ISO 129-1:2018',
+    'Draft ISO 129-1:2018',
+    'ISO 129-1:2018/Amd 1:2020',
+    'ISO 129-1-2018 A1-2020',
+  ])
+    assert.equal(exactTitleMatches('ISO 129-1:2018', title), false, title);
+  assert.equal(exactTitleMatches('ISO 129-1:2018/Amd 1:2020', 'ISO 129-1:2018/Amd 1:2020'), true);
+  assert.equal(exactTitleMatches('DIN EN ISO 129-1:2022-02', 'DIN EN ISO 129-1 2022-02'), true);
+  assert.equal(exactTitleMatches('DIN EN ISO 129-1:2022-02', 'DIN EN ISO 129-1 2019-12'), false);
+  assert.equal(exactTitleMatches('ASME Y14.6-2001 (R2025)', 'ASME Y14.6-2001'), true);
+  assert.equal(exactTitleMatches('ASME Y14.6-2001 (R2025)', 'ASME Y14.6-2016'), false);
+});
+
+test('a valid exact match on a later page finishes before old editions or optimized requests are processed', async (t) => {
+  const job = await fixture(t),
+    calls = [],
+    phases = [],
+    downloads = [];
+  const iterator = searchDocumentPages(job.query, job.controller.signal, job.log, {
+    onPhase: (phase) => phases.push(phase),
+    fetcher: async (value) => {
+      const url = new URL(value),
+        q = url.searchParams.get('q'),
+        page = Number(url.searchParams.get('p'));
+      calls.push([q, page]);
+      assert.equal(q, job.query, 'exact query must retain the colon and year');
+      assert.ok(page <= 2, 'verified PDF must not trigger more discovery');
+      return new Response(
+        sourcePage(
+          page,
+          [{ title: page === 1 ? 'ISO14405-1-2016' : 'ISO 14405-1:2025', id: page }],
+          page + 1,
+        ),
+      );
+    },
+  });
+  await runSearchJob(job, job.directory, {
+    _searchIterator: iterator,
+    download: async (child) => {
+      downloads.push(child.url);
+      await fs.writeFile(path.join(child.directory, 'archive.zip'), 'PK-test');
+    },
+    convert: convertFixture,
+  });
+  assert.deepEqual(calls, [
+    [job.query, 1],
+    [job.query, 2],
+  ]);
+  assert.deepEqual(phases, ['exact']);
+  assert.deepEqual(downloads, ['https://www.doc88.com/p-2.html']);
+  assert.equal(job.pdfReady, true);
+});
+
+test('failed exact candidates finish before optimized discovery can accept a differently labelled correct PDF', async (t) => {
+  const job = await fixture(t),
+    calls = [],
+    phases = [],
+    downloads = [];
+  const iterator = searchDocumentPages(job.query, job.controller.signal, job.log, {
+    onPhase: (phase) => phases.push(phase),
+    fetcher: async (value) => {
+      const url = new URL(value),
+        q = url.searchParams.get('q'),
+        page = Number(url.searchParams.get('p'));
+      calls.push([q, page]);
+      const items =
+        q === job.query
+          ? [
+              { title: 'ISO 14405-1:2025', id: 1 },
+              { title: 'ISO 14405-1:2016', id: 2 },
+            ]
+          : q === 'ISO 14405-1 2025'
+            ? []
+            : [{ title: 'ISO 14405-1:2016', id: 2 }];
+      return new Response(sourcePage(page, items));
+    },
+  });
+  await runSearchJob(job, job.directory, {
+    _searchIterator: iterator,
+    download: async (child) => {
+      downloads.push(child.url);
+      await fs.writeFile(path.join(child.directory, 'archive.zip'), 'PK-test');
+    },
+    convert: (child) => convertFixture(child, child.url.endsWith('p-1.html') ? french : english),
+  });
+  assert.deepEqual(phases, ['exact', 'optimized']);
+  assert.deepEqual(calls, [
+    [job.query, 1],
+    ['ISO 14405-1 2025', 1],
+    ['ISO 14405-1', 1],
+  ]);
+  assert.deepEqual(downloads, ['https://www.doc88.com/p-1.html', 'https://www.doc88.com/p-2.html']);
+  assert.equal(job.searchResults[0].checks.language.status, 'failed');
+  assert.equal(job.searchResults[1].checks.identity.status, 'passed');
+  assert.equal(job.pdfReady, true);
+});
+
+test('empty exact results switch to optimized search and identical ASME requests reuse parsed responses', async () => {
+  const phases = [],
+    calls = [];
+  const rows = await searchAllDocuments(
+    'ASME Y14.6-2001 (R2025)',
+    new AbortController().signal,
+    () => {},
+    {
+      onPhase: (phase) => phases.push(phase),
+      fetcher: async (value) => {
+        const url = new URL(value),
+          q = url.searchParams.get('q'),
+          page = Number(url.searchParams.get('p'));
+        calls.push([q, page]);
+        return new Response(sourcePage(page, [{ title: 'ASME Y14.6', id: 1, pages: 24 }]));
+      },
+    },
+  );
+  assert.deepEqual(phases, ['exact', 'optimized']);
+  assert.equal(rows.length, 1);
+  assert.equal(calls.filter(([q]) => q === 'ASME Y14.6-2001').length, 1);
+});
+
+test('resuming an older broad-search job discards its candidate order and starts fresh discovery', async (t) => {
+  const job = await fixture(t),
+    downloads = [];
+  job.searchVersion = 3;
+  job.searchResults = [{ ...candidate('https://www.doc88.com/p-1.html'), status: 'error' }];
+  await runSearchJob(job, job.directory, {
+    resume: true,
+    search: async () => [candidate('https://www.doc88.com/p-2.html')],
+    download: async (child) => {
+      downloads.push(child.url);
+      await fs.writeFile(path.join(child.directory, 'archive.zip'), 'PK-test');
+    },
+    convert: convertFixture,
+  });
+  assert.deepEqual(downloads, ['https://www.doc88.com/p-2.html']);
+  assert.equal(job.searchVersion, 4);
+});
+
+test('two preliminary checks overlap while full processing stays ordered and ignores speculative progress', async (t) => {
+  const job = await fixture(t),
+    downloads = [],
+    started = [];
+  let secondStarted;
+  const ready = new Promise((resolve) => {
+    secondStarted = resolve;
+  });
+  await runSearchJob(job, job.directory, {
+    candidates: [
+      candidate('https://www.doc88.com/p-1.html'),
+      candidate('https://www.doc88.com/p-2.html'),
+    ],
+    preview: async (child) => {
+      started.push(child.url);
+      child.update({ stage: 'ocr', message: 'SPECULATIVE PROGRESS' });
+      assert.doesNotMatch(job.message, /SPECULATIVE/);
+      if (child.url.endsWith('p-1.html')) {
+        await ready;
+        throw Object.assign(Error('wrong language'), { code: 'FOREIGN_LANGUAGE' });
+      }
+      secondStarted();
+      return { language: { status: 'passed' } };
+    },
+    download: async (child) => {
+      downloads.push(child.url);
+      await fs.writeFile(path.join(child.directory, 'archive.zip'), 'PK-test');
+    },
+    convert: convertFixture,
+  });
+  assert.equal(started.length, 2);
+  assert.equal(job.previewDiagnostics.peak, 2);
+  assert.deepEqual(downloads, ['https://www.doc88.com/p-2.html']);
+  assert.equal(job.previewDiagnostics.active, 0);
+  assert.equal(job.performanceMetrics.status, 'done');
+  assert.ok(
+    job.performanceMetrics.stages.some((stage) => stage.key === 'preview' && stage.calls === 2),
+  );
+});
+
+test('a faster later preview cannot outrank the first valid candidate; pending work is aborted and drained', async (t) => {
+  const job = await fixture(t),
+    downloads = [];
+  let otherStarted,
+    drained = false;
+  const ready = new Promise((resolve) => {
+    otherStarted = resolve;
+  });
+  await runSearchJob(job, job.directory, {
+    candidates: [
+      candidate('https://www.doc88.com/p-1.html'),
+      candidate('https://www.doc88.com/p-2.html'),
+    ],
+    preview: async (child) => {
+      if (child.url.endsWith('p-1.html')) {
+        await ready;
+        return { language: { status: 'passed' } };
+      }
+      otherStarted();
+      await new Promise((resolve) =>
+        child.controller.signal.addEventListener('abort', resolve, { once: true }),
+      );
+      drained = true;
+      child.controller.signal.throwIfAborted();
+    },
+    download: async (child) => {
+      downloads.push(child.url);
+      await fs.writeFile(path.join(child.directory, 'archive.zip'), 'PK-test');
+    },
+    convert: convertFixture,
+  });
+  assert.deepEqual(downloads, ['https://www.doc88.com/p-1.html']);
+  assert.equal(drained, true);
+  assert.equal(job.previewDiagnostics.cancelled, 1);
+  assert.equal(job.previewDiagnostics.active, 0);
+  assert.equal(job.stage, 'done');
+  assert.ok(job.performanceMetrics.stages.every((stage) => stage.active === 0));
+});
+
+test('cancelling parallel previews waits for cleanup and never exposes a PDF', async (t) => {
+  const job = await fixture(t);
+  let count = 0;
+  await assert.rejects(
+    runSearchJob(job, job.directory, {
+      candidates: [
+        candidate('https://www.doc88.com/p-1.html'),
+        candidate('https://www.doc88.com/p-2.html'),
+      ],
+      preview: async (child) => {
+        const stopped = new Promise((resolve) =>
+          child.controller.signal.addEventListener('abort', resolve, { once: true }),
+        );
+        if (++count === 2) job.controller.abort();
+        await stopped;
+        child.controller.signal.throwIfAborted();
+      },
+      download: async () => {
+        throw Error('must never reach download');
+      },
+      convert: convertFixture,
+    }),
+    /остановлена/,
+  );
+  assert.equal(count, 2);
+  assert.equal(job.previewDiagnostics.active, 0);
+  assert.equal(job.performanceMetrics.status, 'cancelled');
+  assert.equal(Boolean(job.pdfReady), false);
+  await assert.rejects(fs.access(path.join(job.directory, 'result.pdf')));
 });

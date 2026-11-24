@@ -7,10 +7,11 @@ RUN npm ci --omit=dev && npm cache clean --force \
     && apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/* \
     && chmod -R a+rX /ms-playwright
-COPY cloud-server.cjs pipeline.cjs checkpoints.cjs page-check.cjs image-quality.cjs document-analysis.cjs runtime.cjs challenge-view.cjs LICENSE ./
+COPY cloud-server.cjs pipeline.cjs ocr-quality.cjs copy-text.cjs script-check.cjs checkpoints.cjs page-check.cjs image-quality.cjs document-analysis.cjs runtime.cjs challenge-view.cjs LICENSE ./
+COPY ocr-pages.cjs ocr-pool.cjs pdf-image-compression.cjs pdf-structure.cjs heading-ocr.cjs structure.cjs structure-layout.cjs ./
 COPY cloud ./cloud
 COPY web/style.css ./web/style.css
-COPY dist/icon.svg ./dist/icon.svg
+COPY dist/icon.svg dist/product.js dist/ocr-language.js dist/standard-reference.js ./dist/
 COPY vendor ./vendor
 RUN mkdir -p /app/.data && chown -R node:node /app/.data
 USER node

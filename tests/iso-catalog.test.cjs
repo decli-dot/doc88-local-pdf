@@ -248,6 +248,18 @@ test('missing years return official lifecycle choices, including older designati
   const exact = await resolveISOStandard(reference('ISO 129-1:2004'), options);
   assert.equal(exact.reference, 'ISO 129-1:2004');
   assert.equal(exact.status, 'Withdrawn');
+  const choices = await resolveISOStandard(reference('ISO 129-1'), {
+    ...options,
+    chooseEdition: true,
+  });
+  assert.equal(choices.choice, true);
+  assert.equal(choices.reference, 'ISO 129-1');
+  assert.deepEqual(
+    choices.editions.map((e) => e.reference),
+    ['ISO 129-1:2018', 'ISO 129-1:2004', 'ISO 129:1985', 'ISO 2595:1973'],
+  );
+  assert.equal(choices.incomplete, false);
+  assert.equal(closed, 3);
 });
 
 test('partial or cancelled lifecycle reads cannot claim that an edition does not exist', async () => {

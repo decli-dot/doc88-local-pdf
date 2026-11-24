@@ -31,9 +31,18 @@ function allowedDocument(value) {
   }
 }
 
-// Only a cropped live image and human pointer events cross the localhost boundary.
+// Only a cropped live image, human pointer events and explicitly enabled literal input cross localhost.
 // No automatic challenge recognition, mouse paths, HTML proxy, or security overrides.
-function createChallengeView({ page, cdp, evaluate, allowed = allowedDocument }) {
+function createChallengeView({
+  page,
+  cdp,
+  evaluate,
+  allowed = allowedDocument,
+  locate = visibleChallenge,
+  maxWidth = 440,
+  maxHeight = 360,
+  allowKeyboard = false,
+}) {
   let closed = false;
   let region = null;
   let token = randomUUID();
@@ -43,7 +52,7 @@ function createChallengeView({ page, cdp, evaluate, allowed = allowedDocument })
   async function state() {
     if (closed || page.isClosed() || !allowed(page.url()))
       throw failure('Окно проверки уже закрыто.');
-    const value = await evaluate(visibleChallenge);
+    const value = await evaluate(locate);
     if (!value) throw failure('Подтверждение больше не требуется.');
     return value;
   }
@@ -58,14 +67,17 @@ function createChallengeView({ page, cdp, evaluate, allowed = allowedDocument })
     capture = (async () => {
       let current = await state();
       if (!region) {
-        if (current.y < 180 || current.y + current.height > current.viewportHeight - 30) {
+        if (
+          current.id &&
+          (current.y < 180 || current.y + current.height > current.viewportHeight - 30)
+        ) {
           await evaluate(
             `document.getElementById(${JSON.stringify(current.id)})?.scrollIntoView({block:'center',inline:'center'})`,
           );
           current = await state();
         }
-        const width = Math.min(440, current.viewportWidth);
-        const height = Math.min(360, current.viewportHeight);
+        const width = Math.min(maxWidth, current.viewportWidth);
+        const height = Math.min(maxHeight, current.viewportHeight);
         region = {
           x: Math.max(
             0,
@@ -104,6 +116,7 @@ function createChallengeView({ page, cdp, evaluate, allowed = allowedDocument })
         width: capturedRegion.width,
         height: capturedRegion.height,
         image: 'data:image/png;base64,' + data,
+        ...(allowKeyboard ? { keyboard: true } : {}),
       };
     })();
     try {
@@ -113,17 +126,26 @@ function createChallengeView({ page, cdp, evaluate, allowed = allowedDocument })
     }
   }
   async function input(value) {
+    const pointer = ['move', 'down', 'up'].includes(value?.type);
+    const keyboard =
+      allowKeyboard &&
+      ((value?.type === 'text' &&
+        typeof value.text === 'string' &&
+        value.text.length <= 64 &&
+        !/[\u0000-\u001f\u007f]/.test(value.text)) ||
+        (value?.type === 'key' && ['Enter', 'Tab', 'Backspace'].includes(value.key)));
     if (
       !value ||
       !region ||
       value.token !== token ||
-      !['move', 'down', 'up'].includes(value.type) ||
-      !Number.isFinite(value.x) ||
-      !Number.isFinite(value.y) ||
-      value.x < 0 ||
-      value.x > 1 ||
-      value.y < 0 ||
-      value.y > 1
+      (!pointer && !keyboard) ||
+      (pointer &&
+        (!Number.isFinite(value.x) ||
+          !Number.isFinite(value.y) ||
+          value.x < 0 ||
+          value.x > 1 ||
+          value.y < 0 ||
+          value.y > 1))
     )
       throw failure('Обнови изображение проверки и попробуй снова.', 400);
     const run = async () => {
@@ -134,6 +156,12 @@ function createChallengeView({ page, cdp, evaluate, allowed = allowedDocument })
       }
       await state();
       if (closed || value.token !== token) throw failure('Окно проверки уже изменилось.');
+      if (keyboard) {
+        await release();
+        if (value.type === 'text') await page.keyboard.insertText(value.text);
+        else await page.keyboard.press(value.key);
+        return;
+      }
       const x = region.x + value.x * (region.width - 1);
       const y = region.y + value.y * (region.height - 1);
       await page.mouse.move(x, y);

@@ -107,9 +107,16 @@ let context, server, monitor;
   await resultPage.waitForFunction(() =>
     document.getElementById('browser-connection')?.textContent.includes('Расширение готово'),
   );
-  await resultPage.locator('#url-tab').click();
-  await resultPage.locator('#document-url').fill(docURL);
-  await resultPage.locator('#start-url').click();
+  // Exercise the extension transport without exposing a provider URL input in the ordinary UI.
+  await resultPage.evaluate(async (url) => {
+    const response = await window.Doc88Browser.fetch('/api/jobs', {
+      method: 'POST',
+      body: JSON.stringify({ url, fromPage: 1, enhanceImages: true, ocrLanguage: 'eng' }),
+    });
+    const job = await response.json();
+    if (!response.ok) throw Error(job.error);
+    window.dispatchEvent(new CustomEvent('doc88-import', { detail: { id: job.id } }));
+  }, docURL);
   resultPage.on('pageerror', (error) => console.error('Converter: ' + error.message));
   let previous = '';
   monitor = setInterval(async () => {

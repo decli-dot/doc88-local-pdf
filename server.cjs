@@ -14,9 +14,22 @@ const {
   nativeAvailable,
 } = require('./pipeline.cjs');
 const { validateQuery, runSearchJob } = require('./search.cjs');
-const { validateBatch, summarizeBatch, batchZip } = require('./batch.cjs');
+const { requestedPolicy, providersFor } = require('./source-policy.cjs');
+const { createSourceSearch } = require('./source-search.cjs');
+const { createCaptchaService } = require('./captcha-service.cjs');
+const { createBrowserCaptchaSolver } = require('./captcha-browser.cjs');
+const { validateBatch, summarizeBatch, batchZip, pdfFilename } = require('./batch.cjs');
 const { atomicWrite } = require('./checkpoints.cjs');
+const { displayText, present } = require('./dist/product.js');
 
+const { resolve: ocrLanguage } = require('./dist/ocr-language.js');
+const { choices: languageOptions, seriesChoices } = require('./dist/ocr-language.js');
+const { createDevAccess, publicJob } = require('./dev-access.cjs');
+const reviews = require('./document-review.cjs');
+const sharedCache = require('./shared-cache.cjs');
+const { feedback, failureKind } = require('./dist/job-feedback.js');
+const { processDocument, requestedMode, validateMode } = require('./document-engine.cjs');
+let devAccess, captchaService;
 const PORT = Number(process.env.DOC88_PORT || 8968);
 if (!Number.isSafeInteger(PORT) || PORT < 1 || PORT > 65535)
   throw new Error('DOC88_PORT должен быть целым числом от 1 до 65535.');
@@ -41,11 +54,11 @@ function snapshot(job) {
   };
 }
 
-function enhanceSetting(value) {
+function enhanceSetting(value, isDev = false) {
   if (value === undefined) return true;
   if (typeof value !== 'boolean')
     throw Error('Настройка улучшения страниц должна быть включена или выключена.');
-  return value;
+  return isDev ? value : true;
 }
 function persist(job) {
   const text = JSON.stringify(snapshot(job), null, 2);
@@ -60,6 +73,7 @@ function persist(job) {
 
 function attachMethods(job) {
   job.challengeAvailable = false;
+  job.captchaSolving = false;
   job.controller = new AbortController();
   job.directory = path.join(DATA, 'jobs', job.id);
   job.cacheDirectory = path.join(DATA, 'models');
@@ -92,6 +106,8 @@ async function newJob(input, queued = false) {
     logs: [],
     enhanceImages: true,
     ...input,
+    ocrLanguage: ocrLanguage(input.query || input.title, input.ocrLanguage, input.documentLanguage),
+    processingMode: validateMode(input.processingMode),
   });
   // Claim the slot before the first await so simultaneous requests cannot both run.
   if (!queued) active = job;
@@ -108,8 +124,9 @@ async function newJob(input, queued = false) {
 
 async function runJob(job, needsDownload) {
   const resume = Boolean(job.resumeRequested);
-  job.update({ resumeRequested: false });
+  job.update({ resumeRequested: false, errorCode: null, failureKind: null });
   const downloadOptions = {
+    tryCaptcha: createBrowserCaptchaSolver(captchaService, job),
     headless: true,
     inlineChallenge: true,
     viewport: { width: 1280, height: 900 },
@@ -121,28 +138,180 @@ async function runJob(job, needsDownload) {
     },
   };
   try {
-    if (job.kind === 'search')
-      await runSearchJob(job, DATA, {
+    if (job.kind === 'search' || job.kind === 'anna') {
+      const sources = createSourceSearch(job, DATA, {
+        chooseEdition: true,
         downloadOptions,
         resume,
-        ...(job.searchCandidates ? { candidates: job.searchCandidates } : {}),
+        candidates: job.searchCandidates,
       });
-    else {
-      if (needsDownload) await downloadArchive(job, DATA, downloadOptions);
-      await convertArchive(job);
+      try {
+        await runSearchJob(job, DATA, sources.options);
+      } finally {
+        await sources.close();
+      }
+    } else {
+      if (needsDownload) await processDocument(job, DATA, { downloadOptions });
+      else await convertArchive(job);
     }
   } catch (error) {
     const cancelled = job.controller.signal.aborted;
     job.update({
       stage: cancelled ? 'cancelled' : 'error',
+      errorCode: cancelled ? null : error.code || null,
+      failureKind: cancelled
+        ? null
+        : failureKind(error) === 'processing' && job.workflowPhase === 'edition'
+          ? 'catalogue'
+          : failureKind(error),
       message: cancelled ? 'Обработка остановлена.' : error.message,
       finishedAt: new Date().toISOString(),
     });
     console.error('Job', job.id, cancelled ? 'cancelled' : error.message);
   } finally {
     browserViews.delete(job.id);
+    if (job.stage === 'done')
+      job.update({ review: reviews.publicReview(await reviews.reviewFor(job, DATA)) });
+    if (job.captchaSolving) job.update({ captchaSolving: false });
     if (job.challengeAvailable) job.update({ challengeAvailable: false });
     if (active === job) active = null;
+    pump();
+  }
+}
+async function enqueueDocuments(job, references, preferred) {
+  const single = references === null;
+  const codes = Array.isArray(preferred) ? preferred : [preferred];
+  const editions = single
+    ? [job.catalogueEdition || job.isoEdition]
+    : references.map((reference) =>
+        job.seriesOptions?.find((item) => item.reference === reference),
+      );
+  if (!editions.length || editions.some((item) => !item))
+    throw Error('Выберите документы из предложенной серии.');
+  if (
+    !codes.length ||
+    !codes.every((code) => seriesChoices(editions).some((choice) => choice.code === code))
+  )
+    throw Error('Выберите язык из списка.');
+  const multilingual = codes.length > 1;
+  const entries = editions.flatMap((edition) => {
+    const available = languageOptions(edition.reference, edition).filter((choice) =>
+      codes.includes(choice.code),
+    );
+    return multilingual && available.length
+      ? available.map((choice) => ({ edition, language: choice.code }))
+      : [{ edition, language: null }];
+  });
+  if (creatingBatch || pending.length + entries.length > 500)
+    throw Object.assign(Error('Дождитесь добавления текущего списка.'), { status: 409 });
+  creatingBatch = true;
+  const previous = Object.fromEntries(
+    [
+      'stage',
+      'query',
+      'title',
+      'resolvedQuery',
+      'seriesOptions',
+      'seriesReference',
+      'languageScope',
+      'languageChoices',
+      'languageDocumentCount',
+      'pendingSeriesReferences',
+      'documentLanguage',
+      'batchLanguagePreference',
+      'languageException',
+      'isoEdition',
+      'catalogueEdition',
+      'batchId',
+      'selectedSeriesReferences',
+      'originalSeriesQuery',
+      'ocrLanguage',
+      'multilingual',
+      'searchCandidates',
+      'searchResults',
+      'message',
+    ].map((key) => [key, job[key]]),
+  );
+  const existing = batches.get(job.batchId);
+  const batch = existing
+      ? {
+          ...existing,
+          jobIds: [...existing.jobIds],
+          languages: [...new Set([...(existing.languages || []), ...codes])],
+        }
+      : {
+          id: randomUUID(),
+          createdAt: new Date().toISOString(),
+          jobIds: [job.id],
+          languages: codes,
+        },
+    created = [];
+  const first = entries[0],
+    firstEdition = first.edition;
+  job.controller = new AbortController();
+  job.update({
+    stage: 'queued',
+    query: single ? job.query : firstEdition.reference,
+    title: firstEdition.reference,
+    originalSeriesQuery: single ? job.originalSeriesQuery : job.query,
+    resolvedQuery: firstEdition.reference,
+    isoEdition: firstEdition.publisher && firstEdition.publisher !== 'ISO' ? null : firstEdition,
+    catalogueEdition:
+      firstEdition.publisher && firstEdition.publisher !== 'ISO' ? firstEdition : null,
+    batchId: batch.id,
+    seriesOptions: null,
+    selectedSeriesReferences: single ? job.selectedSeriesReferences : references,
+    batchLanguagePreference: codes[0],
+    documentLanguage: first.language,
+    ocrLanguage: first.language || job.ocrLanguage,
+    multilingual,
+    searchCandidates: null,
+    searchResults: [],
+    languageScope: null,
+    languageChoices: null,
+    languageException: null,
+    languageDocumentCount: null,
+    pendingSeriesReferences: null,
+    message: 'В очереди.',
+  });
+  try {
+    for (const { edition, language } of entries.slice(1)) {
+      const member = await newJob(
+        {
+          kind: 'search',
+          sourcePolicy: job.sourcePolicy,
+          ...(job.searchProvider === 'anna' ? { searchProvider: 'anna' } : {}),
+          query: edition.reference,
+          title: edition.reference,
+          ...(edition.publisher && edition.publisher !== 'ISO'
+            ? { catalogueEdition: edition }
+            : { isoEdition: edition }),
+          batchId: batch.id,
+          enhanceImages: job.enhanceImages,
+          ocrLanguage: language || job.ocrLanguage,
+          documentLanguage: language,
+          batchLanguagePreference: codes[0],
+          multilingual,
+          processingMode: job.processingMode || 'auto',
+        },
+        true,
+      );
+      created.push(member);
+    }
+    batch.jobIds.splice(batch.jobIds.indexOf(job.id) + 1, 0, ...created.map((member) => member.id));
+    await fs.mkdir(path.join(DATA, 'batches'), { recursive: true });
+    await Promise.all([job.writing, ...created.map((member) => member.writing)]);
+    await atomicWrite(path.join(DATA, 'batches', batch.id + '.json'), JSON.stringify(batch));
+    batches.set(batch.id, batch);
+    pending.push(job, ...created);
+    return batch;
+  } catch (error) {
+    job.update(previous);
+    for (const member of created)
+      member.update({ stage: 'error', message: 'Не удалось добавить список.' });
+    throw error;
+  } finally {
+    creatingBatch = false;
     pump();
   }
 }
@@ -159,6 +328,18 @@ function pump() {
 function resumeJob(job) {
   if (!snapshot(job).canResume) throw Error('Этот документ сейчас нельзя продолжить.');
   job.controller = new AbortController();
+  if (
+    job.languageScope === 'series' &&
+    job.pendingSeriesReferences?.length &&
+    job.languageChoices?.length
+  ) {
+    job.update({
+      stage: 'language',
+      finishedAt: null,
+      message: 'Выберите язык для выбранных документов.',
+    });
+    return;
+  }
   if (job.kind === 'search' && job.isoChoices?.length && !job.resolvedQuery) {
     job.update({
       stage: 'choosing',
@@ -208,9 +389,21 @@ async function readBody(request, limit) {
 }
 
 const staticFiles = new Map([
+  ...['asme.svg', 'bs.svg', 'din.png', 'en.svg', 'iso.svg', 'nf.webp'].map((name) => [
+    '/logo-' + name,
+    [
+      'logo-' + name,
+      name.endsWith('.svg') ? 'image/svg+xml' : name.endsWith('.png') ? 'image/png' : 'image/webp',
+    ],
+  ]),
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/query.js', ['query.js', 'text/javascript; charset=utf-8']],
+  ['/i18n.js', ['i18n.js', 'text/javascript; charset=utf-8']],
+  ['/standard-reference.js', ['standard-reference.js', 'text/javascript; charset=utf-8']],
+  ['/ocr-language.js', ['ocr-language.js', 'text/javascript; charset=utf-8']],
+  ['/job-feedback.js', ['job-feedback.js', 'text/javascript; charset=utf-8']],
+  ['/product.js', ['product.js', 'text/javascript; charset=utf-8']],
   ['/challenge.js', ['challenge.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/icon.svg', ['icon.svg', 'image/svg+xml']],
@@ -227,6 +420,131 @@ const server = http.createServer(async (request, response) => {
     ) {
       return json(response, 403, { error: 'Открой приложение через его локальную страницу.' });
     }
+    const isDev = devAccess.authenticated(request);
+    const view = (job) => {
+      const value = isDev ? { ...snapshot(job), ...feedback(job) } : publicJob(snapshot(job));
+      if (job.pdfFilename) value.pdfFilename = pdfFilename(job);
+      return value;
+    };
+    const batchView = (batch) => {
+      const value = summarizeBatch(batch, jobs, view);
+      if (!isDev)
+        value.items = value.items.map((item) => {
+          const projected = view(jobs.get(item.id));
+          return {
+            ...item,
+            message: projected.message,
+            progress: projected.progress,
+            problem: projected.problem,
+            hasQualityNotes: Boolean(projected.qualityNotes?.length),
+            pageCheckStatus: undefined,
+          };
+        });
+      return isDev ? value : present(value);
+    };
+    if (url.pathname === '/api/dev/cache' && request.method === 'GET') {
+      if (!isDev) return json(response, 403, { error: 'Требуется вход в dev-режим.' });
+      const log = await reviews.readReviews(DATA);
+      const items = require('./cache-list.cjs').cacheList(jobs.values(), log.records);
+      return json(response, 200, { items, events: log.events });
+    }
+    const cacheReuse = url.pathname.match(/^\/api\/dev\/cache\/([a-f\d-]{36})\/reuse$/);
+    if (request.method === 'POST' && cacheReuse) {
+      if (!isDev) return json(response, 403, { error: 'Требуется вход в dev-режим.' });
+      const old = jobs.get(cacheReuse[1]);
+      if (
+        !old ||
+        !sharedCache.verified(old) ||
+        (await reviews.reviewFor(old, DATA))?.rating === 'bad'
+      )
+        return json(response, 409, {
+          error: 'Этот документ требует повторной проверки. Запустите новый поиск.',
+        });
+      const job = await newJob({
+        kind: 'search',
+        query: old.resolvedQuery || old.query,
+        resolvedQuery: old.resolvedQuery,
+        title: old.title,
+        isoEdition: old.isoEdition,
+        catalogueEdition: old.catalogueEdition,
+        documentLanguage: old.documentLanguage,
+        ocrLanguage: old.ocrLanguage,
+        enhanceImages: old.enhanceImages,
+        processingMode: old.processingMode,
+      });
+      try {
+        const cached = await sharedCache.loadSharedCache(job, DATA);
+        if (!cached?.ready) throw Error('Кеш повреждён или неполон. Запустите новый поиск.');
+        job.update({ review: reviews.publicReview(await reviews.reviewFor(job, DATA)) });
+        return json(response, 200, view(job));
+      } catch (error) {
+        job.update({ stage: 'error', message: error.message });
+        throw error;
+      } finally {
+        if (active === job) active = null;
+        pump();
+      }
+    }
+    const reviewMatch = url.pathname.match(/^\/api\/jobs\/([a-f\d-]{36})\/review$/);
+    if (request.method === 'POST' && reviewMatch) {
+      const job = jobs.get(reviewMatch[1]);
+      if (!job || job.stage !== 'done' || !job.pdfReady)
+        return json(response, 409, { error: 'Оценка доступна после подготовки PDF.' });
+      const input = JSON.parse((await readBody(request, 20000)).toString('utf8'));
+      const saved = await reviews.saveReview(job, input, DATA);
+      for (const item of jobs.values())
+        if (reviews.reviewKey(item) === saved.key)
+          item.update({ review: reviews.publicReview(saved) });
+      return json(response, 200, { review: reviews.publicReview(saved) });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/dev/login') {
+      const input = JSON.parse((await readBody(request, 2000)).toString('utf8'));
+      devAccess.login(request, response, input.password);
+      return json(response, 200, { devMode: true });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/dev/logout') {
+      devAccess.logout(request, response);
+      return json(response, 200, { devMode: false });
+    }
+    if (url.pathname === '/api/dev/captcha' || url.pathname === '/api/dev/captcha/balance') {
+      if (!isDev) return json(response, 403, { error: 'Требуется вход в dev-режим.' });
+      if (request.method === 'GET' && url.pathname === '/api/dev/captcha')
+        return json(response, 200, captchaService.summary());
+      if (request.method === 'POST' && url.pathname === '/api/dev/captcha') {
+        const input = JSON.parse((await readBody(request, 2000)).toString('utf8'));
+        return json(response, 200, await captchaService.update(input));
+      }
+      if (request.method === 'POST' && url.pathname === '/api/dev/captcha/balance')
+        return json(response, 200, await captchaService.balance());
+      return json(response, 405, { error: 'Метод не поддерживается.' });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/experiments/anna') {
+      if (!isDev) return json(response, 403, { error: 'Требуется вход в dev-режим.' });
+      const input = JSON.parse((await readBody(request, 10000)).toString('utf8'));
+      const query = validateQuery(input.query);
+      if (!require('./iso-catalog.cjs').reference(query))
+        throw Error('Этот эксперимент поддерживает обозначения ISO.');
+      const ref = input.cardURL
+        ? require('./experimental/anna-source.cjs').references(input.cardURL, input.slowURL)
+        : null;
+      if (!ref && input.slowURL) throw Error('Для страницы скачивания укажите карточку документа.');
+      const job = await newJob({
+        kind: 'search',
+        sourcePolicy: 'anna-only',
+        searchProvider: 'anna',
+        provider: 'anna',
+        query,
+        title: query,
+        ...(ref ? { url: ref.card, annaCardURL: ref.card, annaSlowURL: ref.slow } : {}),
+        ocrLanguage: 'eng',
+        documentLanguage: 'eng',
+        enhanceImages: true,
+        processingMode: 'auto',
+      });
+      json(response, 202, view(job));
+      void runJob(job, true);
+      return;
+    }
     if (request.method === 'GET' && staticFiles.has(url.pathname)) {
       const [file, type] = staticFiles.get(url.pathname);
       const bytes = await fs.readFile(path.join(__dirname, 'dist', file));
@@ -241,17 +559,17 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/api/status')
       return json(response, 200, {
         app: 'doc88-local-pdf',
+        devMode: isDev,
+        devConfigured: devAccess.configured,
         ocr: nativeAvailable ? 'ready' : 'download-on-first-use',
         activeId: active?.id || null,
-        jobs: [...jobs.values()].slice(-10).reverse().map(snapshot),
-        batches: [...batches.values()]
-          .slice(-5)
-          .reverse()
-          .map((batch) => summarizeBatch(batch, jobs, snapshot)),
+        jobs: [...jobs.values()].slice(-10).reverse().map(view),
+        batches: [...batches.values()].slice(-5).reverse().map(batchView),
       });
     if (request.method === 'POST' && url.pathname === '/api/batches') {
       const input = JSON.parse((await readBody(request, 20000)).toString('utf8'));
       const queries = validateBatch(input.queries);
+      const sourcePolicy = requestedPolicy(input.sourcePolicy, isDev);
       if (creatingBatch || pending.length + queries.length > 100)
         return json(response, 409, {
           error: 'Дождись добавления текущего списка или освобождения очереди.',
@@ -264,10 +582,13 @@ const server = http.createServer(async (request, response) => {
           const job = await newJob(
             {
               kind: 'search',
+              sourcePolicy,
               query,
               title: query,
               batchId: batch.id,
-              enhanceImages: enhanceSetting(input.enhanceImages),
+              enhanceImages: enhanceSetting(input.enhanceImages, isDev),
+              ocrLanguage: input.ocrLanguage,
+              processingMode: requestedMode(input.processingMode, isDev),
             },
             true,
           );
@@ -279,7 +600,7 @@ const server = http.createServer(async (request, response) => {
         await atomicWrite(path.join(DATA, 'batches', batch.id + '.json'), JSON.stringify(batch));
         batches.set(batch.id, batch);
         pending.push(...created);
-        json(response, 202, summarizeBatch(batch, jobs, snapshot));
+        json(response, 202, batchView(batch));
       } catch (error) {
         for (const job of created)
           job.update({
@@ -299,17 +620,16 @@ const server = http.createServer(async (request, response) => {
     if (batchMatch) {
       const batch = batches.get(batchMatch[1]);
       if (!batch) return json(response, 404, { error: 'Список документов не найден.' });
-      if (request.method === 'GET' && !batchMatch[2])
-        return json(response, 200, summarizeBatch(batch, jobs, snapshot));
+      if (request.method === 'GET' && !batchMatch[2]) return json(response, 200, batchView(batch));
       if (request.method === 'GET' && batchMatch[2] === 'zip') {
         if (!summarizeBatch(batch, jobs, snapshot).ready)
           return json(response, 409, { error: 'Готовых PDF пока нет.' });
         response.writeHead(200, {
           'Content-Type': 'application/zip',
-          'Content-Disposition': 'attachment; filename="Doc88_PDF.zip"',
+          'Content-Disposition': 'attachment; filename="DecliPDF_documents.zip"',
           'Cache-Control': 'no-store',
         });
-        await pipeline(batchZip(batch, jobs), response);
+        await pipeline(batchZip(batch, jobs, isDev), response);
         return;
       }
       if (request.method === 'POST' && ['cancel', 'resume'].includes(batchMatch[2])) {
@@ -320,7 +640,7 @@ const server = http.createServer(async (request, response) => {
           else if (snapshot(job).canResume) resumeJob(job);
         }
         pump();
-        return json(response, 200, summarizeBatch(batch, jobs, snapshot));
+        return json(response, 200, batchView(batch));
       }
     }
     if (request.method === 'POST' && url.pathname === '/api/jobs') {
@@ -330,42 +650,52 @@ const server = http.createServer(async (request, response) => {
       const job = await newJob({
         url: docURL,
         ...range,
-        enhanceImages: enhanceSetting(input.enhanceImages),
+        enhanceImages: enhanceSetting(input.enhanceImages, isDev),
+        ocrLanguage: input.ocrLanguage,
+        processingMode: requestedMode(input.processingMode, isDev),
       });
-      json(response, 202, snapshot(job));
+      json(response, 202, view(job));
       void runJob(job, true);
       return;
     }
     if (request.method === 'POST' && url.pathname === '/api/search') {
       const input = JSON.parse((await readBody(request, 10000)).toString('utf8'));
       const query = validateQuery(input?.query);
+      const sourcePolicy = requestedPolicy(input.sourcePolicy, isDev);
       let searchCandidates;
       let isoMetadata;
       if (input.candidateURL) {
+        if (!isDev) return json(response, 403, { error: 'Требуется вход в dev-режим.' });
         const previous = jobs.get(input.sourceJobId);
-        const candidateURL = validateURL(input.candidateURL);
+        const candidateURL = String(input.candidateURL);
         const candidate =
           previous?.kind === 'search' && validateQuery(previous.query) === query
             ? previous.searchResults?.find((item) => item.url === candidateURL)
             : null;
         if (!candidate)
           throw new Error('Вариант не найден в результатах поиска. Запусти поиск снова.');
+        if (!providersFor(sourcePolicy).includes(candidate.provider || 'doc88'))
+          throw Error('Источник выбранного варианта отключён. Измените выбор источников.');
         searchCandidates = [{ ...candidate, status: 'unverified', checks: null, error: undefined }];
         isoMetadata = {
           resolvedQuery: previous.resolvedQuery,
           isoEdition: previous.isoEdition,
           isoLookupURL: previous.isoLookupURL,
+          catalogueEdition: previous.catalogueEdition,
         };
       }
       const job = await newJob({
         kind: 'search',
+        sourcePolicy,
         query,
         title: query,
-        enhanceImages: enhanceSetting(input.enhanceImages),
+        enhanceImages: enhanceSetting(input.enhanceImages, isDev),
+        ocrLanguage: input.ocrLanguage,
         ...(searchCandidates ? { searchCandidates } : {}),
+        processingMode: requestedMode(input.processingMode, isDev),
         ...isoMetadata,
       });
-      json(response, 202, snapshot(job));
+      json(response, 202, view(job));
       void runJob(job, false);
       return;
     }
@@ -384,7 +714,8 @@ const server = http.createServer(async (request, response) => {
       const job = await newJob({
         title: uploadedName.replace(/\.zip$/i, ''),
         url: null,
-        enhanceImages: enhanceHeader !== '0',
+        enhanceImages: !isDev || enhanceHeader !== '0',
+        ocrLanguage: request.headers['x-ocr-language'],
       });
       try {
         await fs.writeFile(path.join(job.directory, 'archive.zip'), archive);
@@ -397,8 +728,112 @@ const server = http.createServer(async (request, response) => {
         active = null;
         throw error;
       }
-      json(response, 202, snapshot(job));
+      json(response, 202, view(job));
       void runJob(job, false);
+      return;
+    }
+    const seriesChoice = url.pathname.match(/^\/api\/jobs\/([a-f\d-]{36})\/series$/);
+    if (request.method === 'POST' && seriesChoice) {
+      const job = jobs.get(seriesChoice[1]);
+      if (!job || job.stage !== 'selecting')
+        return json(response, 409, { error: 'Выбор серии уже завершён.' });
+      const input = JSON.parse((await readBody(request, 30000)).toString('utf8'));
+      if (
+        !Array.isArray(input.references) ||
+        !input.references.length ||
+        input.references.length > 200 ||
+        !input.references.every((reference) => typeof reference === 'string')
+      )
+        return json(response, 400, { error: 'Выберите от 1 до 200 документов серии.' });
+      const references = [...new Set(input.references)];
+      const editions = references.map((reference) =>
+        job.seriesOptions?.find((item) => item.reference === reference),
+      );
+      if (editions.some((edition) => !edition))
+        return json(response, 400, { error: 'Выберите документы из предложенной серии.' });
+      if (job.stage !== 'selecting' || creatingBatch || pending.length + editions.length > 500)
+        return json(response, 409, { error: 'Дождитесь добавления текущего списка.' });
+      const choices = seriesChoices(editions);
+      if (choices.length > 1) {
+        job.update({
+          stage: 'language',
+          languageScope: 'series',
+          languageChoices: choices,
+          pendingSeriesReferences: references,
+          languageDocumentCount: references.length,
+          pdfReady: false,
+          message: 'Выберите язык для выбранных документов.',
+        });
+        return json(response, 200, view(job));
+      }
+      const batch = await enqueueDocuments(job, references, choices[0]?.code);
+      return json(response, 202, batchView(batch));
+    }
+    const reselectLanguage = url.pathname.match(/^\/api\/jobs\/([a-f\d-]{36})\/reselect-language$/);
+    if (request.method === 'POST' && reselectLanguage) {
+      const job = jobs.get(reselectLanguage[1]);
+      if (
+        !job ||
+        job.kind !== 'search' ||
+        job.stage !== 'error' ||
+        feedback(job).problem?.type !== 'language'
+      )
+        return json(response, 409, { error: 'Для этого документа выбор языка сейчас недоступен.' });
+      const choices = languageOptions(
+        job.resolvedQuery || job.query,
+        job.catalogueEdition || job.isoEdition,
+      );
+      if (choices.length < 2)
+        return json(response, 409, { error: 'Для этого обозначения доступен один язык.' });
+      job.update({
+        stage: 'language',
+        languageChoices: choices,
+        finishedAt: null,
+        pdfReady: false,
+        message: 'Выберите язык документа.',
+      });
+      return json(response, 200, view(job));
+    }
+    const languageChoice = url.pathname.match(/^\/api\/jobs\/([a-f\d-]{36})\/language$/);
+    if (request.method === 'POST' && languageChoice) {
+      const job = jobs.get(languageChoice[1]);
+      if (!job || job.stage !== 'language')
+        return json(response, 409, { error: 'Выбор языка уже завершён.' });
+      const input = JSON.parse((await readBody(request, 2000)).toString('utf8'));
+      const codes = input.codes === undefined ? [input.code] : input.codes;
+      if (
+        !Array.isArray(codes) ||
+        !codes.length ||
+        codes.length > 4 ||
+        !codes.every(
+          (code) =>
+            typeof code === 'string' && job.languageChoices?.some((item) => item.code === code),
+        )
+      )
+        return json(response, 400, { error: 'Выберите язык из списка.' });
+      const selected = [...new Set(codes)];
+      if (job.stage !== 'language') return json(response, 409, { error: 'Поиск уже запущен.' });
+      if (job.languageScope === 'series') {
+        const batch = await enqueueDocuments(job, job.pendingSeriesReferences || [], selected);
+        return json(response, 202, batchView(batch));
+      }
+      if (selected.length > 1) {
+        const batch = await enqueueDocuments(job, null, selected);
+        return json(response, 202, batchView(batch));
+      }
+      job.controller = new AbortController();
+      job.update({
+        stage: 'queued',
+        documentLanguage: selected[0],
+        ocrLanguage: selected[0],
+        languageChoices: null,
+        languageException: null,
+        finishedAt: null,
+        message: 'Готовим поиск выбранного языка…',
+      });
+      pending.push(job);
+      json(response, 202, view(job));
+      pump();
       return;
     }
     const editionChoice = url.pathname.match(/^\/api\/jobs\/([a-f\d-]{36})\/edition$/);
@@ -411,7 +846,8 @@ const server = http.createServer(async (request, response) => {
       // It cannot supply a source URL, edition metadata or an arbitrary year.
       const edition = job.isoChoices?.find(
         (item) =>
-          item.reference === input?.reference && /^(Published|Withdrawn)$/.test(item.status),
+          item.reference === input?.reference &&
+          /^(Published|Withdrawn|Historical)$/.test(item.status),
       );
       if (!edition) return json(response, 400, { error: 'Выбери издание из списка ISO.' });
       // Reserve the worker after reading the body; a competing request may have
@@ -422,14 +858,16 @@ const server = http.createServer(async (request, response) => {
       job.update({
         stage: 'queued',
         resolvedQuery: edition.reference,
-        isoEdition: edition,
+        ...(edition.publisher && edition.publisher !== 'ISO'
+          ? { catalogueEdition: edition, isoEdition: null }
+          : { isoEdition: edition }),
         title: edition.reference,
         searchResults: [],
         searchCandidates: null,
         namingWarning: null,
         message: `Выбрано ${edition.reference}. Готовим поиск…`,
       });
-      json(response, 202, snapshot(job));
+      json(response, 202, view(job));
       pending.push(job);
       pump();
       return;
@@ -457,28 +895,42 @@ const server = http.createServer(async (request, response) => {
       }
       return json(response, 405, { error: 'Недопустимое действие.' });
     }
-    const match = url.pathname.match(/^\/api\/jobs\/([a-f\d-]{36})(?:\/(cancel|resume|pdf|zip))?$/);
+    const match = url.pathname.match(
+      /^\/api\/jobs\/([a-f\d-]{36})(?:\/(cancel|resume|pdf|zip|text))?$/,
+    );
     if (match) {
       const job = jobs.get(match[1]);
       if (!job) return json(response, 404, { error: 'Документ не найден.' });
-      if (request.method === 'GET' && !match[2]) return json(response, 200, snapshot(job));
+      if (request.method === 'GET' && !match[2]) return json(response, 200, view(job));
       if (request.method === 'POST' && match[2] === 'cancel') {
         cancelJob(job);
         return json(response, 200, { ok: true });
       }
       if (request.method === 'POST' && match[2] === 'resume') {
         resumeJob(job);
-        json(response, 202, snapshot(job));
+        json(response, 202, view(job));
         pump();
         return;
       }
+      if (request.method === 'GET' && match[2] === 'text') {
+        if (!job.pdfReady || !job.copyTextReady)
+          return json(response, 409, { error: 'Текст документа ещё не готов.' });
+        const filename = path.join(job.directory, 'copy-text.txt');
+        if ((await fs.stat(filename)).size > 20 * 1024 * 1024)
+          return json(response, 413, { error: 'Текст документа слишком большой.' });
+        return json(response, 200, { text: await fs.readFile(filename, 'utf8') });
+      }
       if (request.method === 'GET' && ['pdf', 'zip'].includes(match[2])) {
         const isPDF = match[2] === 'pdf';
+        if (!isPDF && !isDev) return json(response, 403, { error: 'Требуется вход в dev-режим.' });
         if (!(isPDF ? job.pdfReady : job.archiveReady))
           return json(response, 409, { error: 'Файл ещё не готов.' });
         const file = path.join(job.directory, isPDF ? 'result.pdf' : 'archive.zip');
         const stat = await fs.stat(file);
-        const filename = isPDF ? job.pdfFilename : job.archiveFilename;
+        const filename = displayText(
+          (isPDF ? pdfFilename(job) : job.archiveFilename) ||
+            (isPDF ? 'document.pdf' : 'document.zip'),
+        );
         const encodedFilename = encodeURIComponent(filename).replace(
           /['()*]/g,
           (character) => '%' + character.charCodeAt(0).toString(16).toUpperCase(),
@@ -514,6 +966,8 @@ const server = http.createServer(async (request, response) => {
 });
 
 async function main() {
+  devAccess = await createDevAccess(DATA);
+  captchaService = await createCaptchaService(DATA);
   await fs.mkdir(path.join(DATA, 'jobs'), { recursive: true });
   const ids = await fs.readdir(path.join(DATA, 'jobs'));
   for (const id of ids) {
@@ -522,6 +976,27 @@ async function main() {
       const saved = JSON.parse(await fs.readFile(path.join(DATA, 'jobs', id, 'job.json'), 'utf8'));
       if (saved.id !== id) continue;
       const job = attachMethods(saved);
+      if (
+        job.stage === 'done' &&
+        job.pdfReady &&
+        (job.verification?.language?.status === 'failed' ||
+          job.scriptVerification?.status === 'failed')
+      ) {
+        job.update({
+          stage: 'error',
+          pdfReady: false,
+          message:
+            'Предыдущий результат отклонён: язык документа не соответствует издателю. Выполните поиск повторно.',
+          verification: {
+            ...job.verification,
+            language: {
+              version: 2,
+              status: 'failed',
+              message: 'Проверка содержимого выявила другой язык документа.',
+            },
+          },
+        });
+      }
       if (!job.archiveReady && job.kind !== 'search') {
         let handle;
         try {
@@ -546,7 +1021,7 @@ async function main() {
           await handle?.close();
         }
       }
-      if (!terminal.has(job.stage) && job.stage !== 'choosing')
+      if (!terminal.has(job.stage) && !['choosing', 'selecting', 'language'].includes(job.stage))
         job.update({
           stage: 'interrupted',
           pdfReady: false,

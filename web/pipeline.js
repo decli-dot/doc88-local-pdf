@@ -1,4 +1,5 @@
 'use strict';
+const { documentText } = require('../copy-text.cjs');
 const fs = require('./store.js');
 const path = require('./browser-path.js');
 const { command, installed, events } = require('./transport.js');
@@ -10,6 +11,7 @@ const {
   addPDFStructure,
 } = require('../document-analysis.cjs');
 const { Buffer } = require('buffer');
+const { name: productName } = require('../dist/product.js');
 const validateURL = (value) => globalThis.Doc88OCR.validateURL(value);
 function validateRange(from, to) {
   const fromPage = Number(from || 1),
@@ -203,6 +205,7 @@ async function challengeInput(input) {
   return command('CHALLENGE_INPUT', { id: capture.id, input });
 }
 async function convertArchive(job) {
+  const language = require('../dist/ocr-language.js').resolve(job.query, job.ocrLanguage);
   const signal = job.controller.signal,
     { abortable } = globalThis.Doc88OCR;
   signal.throwIfAborted();
@@ -218,7 +221,7 @@ async function convertArchive(job) {
   const { PDFDocument } = globalThis.PDFLib,
     pdf = await PDFDocument.create();
   pdf.setTitle(job.officialTitle || job.title || 'Документ');
-  pdf.setCreator('Doc88 Browser PDF');
+  pdf.setCreator(productName);
   const texts = [],
     hashes = [],
     enhanced = [];
@@ -237,13 +240,13 @@ async function convertArchive(job) {
         stage: 'ocr',
         total: images.length,
         current: pageIndex,
-        message: `Распознаём английский текст: страница ${pageIndex + 1} из ${images.length}`,
+        message: `Распознаём текст: страница ${pageIndex + 1} из ${images.length}`,
       });
       const original = new Uint8Array(await images[pageIndex].arrayBuffer()),
         hash = digest(original);
       hashes.push(hash);
       const name = path.join(job.directory, 'ocr', `page${String(pageIndex + 1).padStart(5, '0')}`),
-        signature = `browser-ocr-v1:${hash}:${job.enhanceImages !== false}`;
+        signature = `browser-ocr-v1:${hash}:${job.enhanceImages !== false}${language === 'eng' ? '' : ':' + language}`;
       const cache = await readJSON(name + '.json');
       let bytes, text, preparation;
       if (cache?.signature === signature) {
@@ -262,10 +265,10 @@ async function convertArchive(job) {
         if (!worker) {
           job.update({
             message:
-              'Загружаем английскую модель OCR. При первом запуске потребуется больше времени…',
+              'Загружаем языковую модель OCR. При первом запуске потребуется больше времени…',
           });
           const assets = new URL('assets/', location.href);
-          const initializing = globalThis.Tesseract.createWorker('eng', 1, {
+          const initializing = globalThis.Tesseract.createWorker(language, 1, {
             workerPath: new URL('worker.min.js', assets).href,
             corePath: new URL('core/', assets).href,
             langPath: new URL('lang/', assets).href,
@@ -339,10 +342,12 @@ async function convertArchive(job) {
     const result = await pdf.save();
     signal.throwIfAborted();
     await fs.writeFile(path.join(job.directory, 'result.pdf'), result);
+    await fs.writeFile(path.join(job.directory, 'copy-text.txt'), documentText(texts));
     signal.throwIfAborted();
     job.update({
       stage: 'done',
       pdfReady: true,
+      copyTextReady: true,
       total: images.length,
       current: images.length,
       pdfFilename: job.officialFilename || globalThis.Doc88OCR.cleanName(job.title) + '.pdf',

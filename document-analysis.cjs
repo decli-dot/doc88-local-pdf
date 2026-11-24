@@ -4,143 +4,7 @@ const clean = (text) =>
   String(text || '')
     .replace(/\s+/g, ' ')
     .trim();
-function isContentsPage(text) {
-  return String(text)
-    .split('\n')
-    .slice(0, 16)
-    .some((line) =>
-      /^(?:Table\s+of\s+)?Contents(?:\s*(?:Page|\(continued\)))?\s*[.]?$/i.test(clean(line)),
-    );
-}
-function headingFor(line) {
-  line = clean(line)
-    .replace(/[.·…]+\s*\d+\s*$/, '')
-    .trim();
-  if (!line || line.length > 160 || /\b(?:shall|should|https?|rights reserved)\b/i.test(line))
-    return null;
-  let match = line.match(/^(Annex|Appendix)\s+([A-Z])(?:\s+|$)(.*)$/i);
-  if (
-    match &&
-    !/^(?:is|are|gives?|shows?|provides?|contains?|illustrates?|describes?|specifies?|see)\b|^\(see\b/i.test(
-      match[3].trim(),
-    )
-  )
-    return {
-      key: 'annex:' + match[2].toUpperCase(),
-      label: 'Annex ' + match[2].toUpperCase(),
-      title: clean(match[3]),
-      kind: 'annex',
-    };
-  if (/^Bibliography\s*[.]?$/i.test(line))
-    return { key: 'bibliography', label: 'Bibliography', title: '', kind: 'bibliography' };
-  if (/^(Foreword|Introduction)\s*[.]?$/i.test(line))
-    return {
-      key: line.replace(/[.]/g, '').toLowerCase(),
-      label: line.replace(/[.]/g, ''),
-      title: '',
-      kind: 'preface',
-    };
-  match = line.match(/^((?:\d{1,2}|[A-Z])(?:\s*\.\s*\d{1,2}){0,5})\.?\s+([^\d\s].*)$/);
-  if (
-    !match ||
-    /^[A-Z]$/.test(match[1]) ||
-    /[.;]$/.test(match[2]) ||
-    match[2].split(' ').length > 22
-  )
-    return null;
-  const label = match[1].replace(/\s+/g, '');
-  return {
-    key: 'clause:' + label,
-    label,
-    title: match[2],
-    kind: label.includes('.') ? 'subsection' : 'section',
-  };
-}
-function buildStructure(texts) {
-  const found = new Map();
-  const tocText = texts.filter(isContentsPage).join('\n');
-  const tocRoots = new Set(
-    tocText
-      .split('\n')
-      .map(headingFor)
-      .filter(Boolean)
-      .filter((node) => node.kind === 'section')
-      .map((node) => node.label),
-  );
-  for (let p = 0; p < texts.length; p++) {
-    const lines = String(texts[p]).split('\n');
-    // A contents page supplies names but OCR often loses its page-number column.
-    // Use body headings for destinations rather than guessing from that list.
-    if (isContentsPage(texts[p])) continue;
-    for (let i = 0; i < lines.length; i++) {
-      let line = clean(lines[i]);
-      if (/^(?:\d+(?:\.\d+)*|[A-Z]\.\d+)\.?$/.test(line) && i + 1 < lines.length)
-        line += ' ' + clean(lines[i + 1]);
-      let heading = headingFor(line);
-      if (!heading) continue;
-      const root = heading.label.split('.')[0];
-      if (
-        tocRoots.size >= 2 &&
-        ['section', 'subsection'].includes(heading.kind) &&
-        !/^[A-Z]$/.test(root) &&
-        !tocRoots.has(root) &&
-        !tocText.toLowerCase().includes(heading.title.toLowerCase()) &&
-        !/^(Scope|Normative references|Terms and definitions|Symbols|Abbreviations)\b/i.test(
-          heading.title,
-        )
-      )
-        continue;
-      if (heading.kind === 'annex' && !heading.title) {
-        const next = lines
-          .slice(i + 1, i + 5)
-          .map(clean)
-          .filter(Boolean);
-        heading.title = next
-          .filter((value) => !/^\((?:informative|normative)\)$/i.test(value))
-          .slice(0, 1)
-          .join(' ');
-      }
-      if (!found.has(heading.key))
-        found.set(heading.key, { ...heading, page: p + 1, line: i, children: [] });
-    }
-  }
-  const flat = [...found.values()].slice(0, 600);
-  const byKey = new Map(flat.map((node) => [node.key, node]));
-  const roots = [];
-  for (const node of flat) {
-    let parent = null;
-    if (node.kind === 'subsection') {
-      const parts = node.label.split('.');
-      while (parts.length > 1 && !parent) {
-        parts.pop();
-        parent = byKey.get(
-          /^[A-Z]$/.test(parts.join('.'))
-            ? 'annex:' + parts.join('.')
-            : 'clause:' + parts.join('.'),
-        );
-      }
-      if (parent && (parent.page > node.page || parent === node)) parent = null;
-    }
-    if (parent) parent.children.push(node);
-    else roots.push(node);
-  }
-  const strip = (node) => ({
-    label: node.label,
-    title: node.title,
-    kind: node.kind,
-    page: node.page,
-    line: node.line,
-    children: node.children.map(strip),
-  });
-  return {
-    nodes: roots.map(strip),
-    count: flat.length,
-    source: 'ocr',
-    message: flat.length
-      ? 'Структура восстановлена по распознанным заголовкам. Проверь неоднозначные названия и переходы.'
-      : 'Заголовки не удалось уверенно выделить из OCR.',
-  };
-}
+const { isContentsPage, headingFor, buildStructure } = require('./structure.cjs');
 function normativeReferences(texts) {
   let collecting = false,
     found = false,
@@ -217,8 +81,11 @@ function normativeReferences(texts) {
   };
 }
 function addPDFStructure(pdf, structure) {
-  if (!structure.nodes.length) return;
   const { PDFName, PDFHexString, PDFNumber, PDFNull } = dependency('pdf-lib');
+  pdf.catalog.delete(PDFName.of('Outlines'));
+  if (pdf.catalog.get(PDFName.of('PageMode'))?.toString() === '/UseOutlines')
+    pdf.catalog.delete(PDFName.of('PageMode'));
+  if (!structure.nodes.length) return;
   const context = pdf.context;
   const root = context.obj({ Type: 'Outlines' }),
     rootRef = context.register(root);
@@ -235,7 +102,11 @@ function addPDFStructure(pdf, structure) {
             page.ref,
             PDFName.of('XYZ'),
             PDFNull,
-            PDFNumber.of(page.getHeight()),
+            PDFNumber.of(
+              Number.isFinite(node.top)
+                ? page.getHeight() * (1 - Math.max(0, Math.min(1, node.top)))
+                : page.getHeight(),
+            ),
             PDFNull,
           ]),
         });

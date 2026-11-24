@@ -12,7 +12,14 @@
     const match = normalized.match(
       /^ISO\s*(?:\/\s*(IEC)\s*)?(\d{3,6})(?:\s*-\s*(\d{1,3})(?!\d))?(?:(?:\s*[:\-]\s*|\s+)((?:19|20)\d{2}))?$/i,
     );
-    if (!match) return text;
+    if (!match) {
+      const catalogue =
+        typeof module === 'object' && module.exports
+          ? require('./standard-reference.js')
+          : globalThis.DecliStandards;
+      const other = catalogue?.parse(normalized);
+      return other ? catalogue.format(other) : text;
+    }
     return `ISO${match[1] ? '/IEC' : ''} ${match[2]}${match[3] ? '-' + match[3] : ''}${match[4] ? ':' + match[4] : ''}`;
   }
   return { normalizeQuery };

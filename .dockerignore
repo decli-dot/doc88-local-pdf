@@ -4,6 +4,7 @@
 !package-lock.json
 !cloud-server.cjs
 !pipeline.cjs
+!ocr-quality.cjs
 !checkpoints.cjs
 !page-check.cjs
 !image-quality.cjs
@@ -17,5 +18,17 @@
 !web/style.css
 !dist/
 !dist/icon.svg
+!dist/product.js
 !vendor/
 !vendor/**
+!dist/ocr-language.js
+!copy-text.cjs
+!dist/standard-reference.js
+!script-check.cjs
+!ocr-pages.cjs
+!ocr-pool.cjs
+!pdf-image-compression.cjs
+!pdf-structure.cjs
+!heading-ocr.cjs
+!structure.cjs
+!structure-layout.cjs

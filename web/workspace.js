@@ -82,6 +82,7 @@ function newJob(input, queued = false) {
     logs: [],
     ...input,
     enhanceImages: input.enhanceImages !== false,
+    ocrLanguage: require('../dist/ocr-language.js').resolve(input.query, input.ocrLanguage),
   });
   jobs.set(job.id, job);
   persist(job);
@@ -90,6 +91,7 @@ function newJob(input, queued = false) {
 async function lookup(wanted, options = {}) {
   return resolveISOStandard(wanted, {
     ...options,
+    detectSeries: false,
     dataDirectory: '/data',
     launchContext: catalogueContext,
   });
@@ -372,6 +374,7 @@ async function fetchAPI(url, options = {}) {
             query,
             title: query,
             enhanceImages: input.enhanceImages,
+            ocrLanguage: input.ocrLanguage,
             ...extras,
           }),
         ),
@@ -386,6 +389,7 @@ async function fetchAPI(url, options = {}) {
             url: validateURL(input.url),
             ...validateRange(input.fromPage, input.toPage),
             enhanceImages: input.enhanceImages,
+            ocrLanguage: input.ocrLanguage,
           }),
         ),
         202,
@@ -400,6 +404,7 @@ async function fetchAPI(url, options = {}) {
           decodeURIComponent(headers.get('x-filename') || 'document.zip').replace(/\.zip$/i, ''),
         ),
         enhanceImages: headers.get('x-doc88-enhance') !== '0',
+        ocrLanguage: headers.get('x-ocr-language') || 'eng',
       });
       active = job;
       try {
@@ -430,6 +435,7 @@ async function fetchAPI(url, options = {}) {
               title: query,
               batchId: batch.id,
               enhanceImages: input.enhanceImages,
+              ocrLanguage: input.ocrLanguage,
             },
             true,
           ),
@@ -457,11 +463,15 @@ async function fetchAPI(url, options = {}) {
       return json(summarizeBatch(batch, jobs, snapshot));
     }
     const match = pathname.match(
-      /^\/api\/jobs\/([a-f\d-]{36})(?:\/(cancel|resume|edition|challenge\/(?:frame|input)))?$/,
+      /^\/api\/jobs\/([a-f\d-]{36})(?:\/(cancel|resume|edition|text|challenge\/(?:frame|input)))?$/,
     );
     if (match) {
       const job = jobs.get(match[1]);
       if (!job) throw Error('Документ не найден.');
+      if (match[2] === 'text') {
+        if (!job.pdfReady || !job.copyTextReady) throw Error('Текст документа ещё не готов.');
+        return json({ text: await fs.readFile(job.directory + '/copy-text.txt', 'utf8') });
+      }
       if (match[2] === 'challenge/frame') return json(await challengeFrame());
       if (match[2] === 'challenge/input') {
         if (active?.id !== job.id) throw Error('Проверка не относится к активному документу.');

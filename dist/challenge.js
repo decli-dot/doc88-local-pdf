@@ -39,11 +39,14 @@
       if (current !== generation) return;
       if (dragging && dragging.token !== next.token) dragging = null;
       frame = next;
+      document.getElementById('challenge-keyboard').hidden = !next.keyboard;
       image.src = next.image;
       image.hidden = false;
       loading.hidden = true;
       screen.setAttribute('aria-busy', 'false');
-      status.textContent = 'Передвинь ползунок. После подтверждения обработка продолжится сама.';
+      status.textContent = next.keyboard
+        ? 'Выполните проверку. После подтверждения обработка продолжится автоматически.'
+        : 'Передвинь ползунок. После подтверждения обработка продолжится сама.';
     } catch (error) {
       if (current !== generation) return;
       status.textContent = [404, 409].includes(error.status)
@@ -83,6 +86,7 @@
       if (source.jobId === jobId && ![404, 409].includes(error.status))
         status.textContent = 'Движение не передалось. Отпусти ползунок и обнови изображение.';
     });
+    return pending;
   }
   image.onpointerdown = (event) => {
     if (!frame || !jobId || event.button !== 0 || dragging) return;
@@ -132,17 +136,47 @@
     generation++;
     clearTimeout(timer);
     frame = null;
+    document.getElementById('challenge-keyboard').hidden = true;
+    document.getElementById('challenge-answer').value = '';
     image.hidden = true;
     image.removeAttribute('src');
     loading.hidden = false;
     screen.setAttribute('aria-busy', 'true');
     panel.hidden = !next;
+    panel.classList.remove('expanded');
+    document.getElementById('challenge-expand').textContent = 'Увеличить проверку';
+    document.getElementById('challenge-expand').setAttribute('aria-expanded', 'false');
     document.querySelector('.workspace').classList.toggle('has-challenge', Boolean(next));
     if (next) void refresh();
   }
   document.getElementById('challenge-refresh').onclick = () => {
     clearTimeout(timer);
     void refresh();
+  };
+  document.getElementById('challenge-keyboard').onsubmit = async (event) => {
+    event.preventDefault();
+    if (!frame?.keyboard) return;
+    const answer = document.getElementById('challenge-answer');
+    try {
+      await send('text', { text: answer.value });
+      answer.value = '';
+    } catch {
+      status.textContent = 'Не удалось передать ответ. Обновите проверку.';
+    }
+  };
+  document.getElementById('challenge-expand').onclick = () => {
+    const expanded = panel.classList.toggle('expanded');
+    document.getElementById('challenge-expand').setAttribute('aria-expanded', String(expanded));
+    document.getElementById('challenge-expand').textContent = expanded
+      ? 'Свернуть проверку'
+      : 'Увеличить проверку';
+  };
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && panel.classList.contains('expanded'))
+      document.getElementById('challenge-expand').click();
+  });
+  document.getElementById('challenge-enter').onclick = () => {
+    if (frame?.keyboard) void send('key', { key: 'Enter' })?.catch(() => {});
   };
   window.addEventListener('pagehide', () => {
     if (dragging)

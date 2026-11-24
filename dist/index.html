@@ -3,38 +3,70 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Doc88 PDF · локальное приложение</title>
+    <title>DecliPDF · Поиск стандартов</title>
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/style.css" />
+    <script defer src="/product.js"></script>
+    <script defer src="/ocr-language.js"></script>
+    <script defer src="/job-feedback.js"></script>
+    <script defer src="/i18n.js"></script>
     <script defer src="/challenge.js"></script>
+    <script defer src="/standard-reference.js"></script>
     <script defer src="/query.js"></script>
     <script defer src="/app.js"></script>
   </head>
   <body>
     <div class="shell">
       <header class="topbar">
-        <a href="/" class="brand"
-          ><img src="/icon.svg" alt="" width="34" height="34" />Doc88 <span>PDF</span></a
+        <a href="/" class="brand" aria-label="DecliPDF — главная"
+          ><img src="/icon.svg" alt="" width="34" height="34" /><span class="brand-name"
+            >Decli<span>PDF</span></span
+          ></a
         >
         <div class="top-actions">
-          <span class="local-badge"><i></i> На твоём компьютере</span
+          <div class="language-switch" role="group" aria-label="Язык интерфейса">
+            <button type="button" data-locale="ru" aria-pressed="true">RU</button
+            ><button type="button" data-locale="en" aria-pressed="false">EN</button>
+          </div>
+          <button id="dev-logout" class="quiet" type="button" hidden>Dev · Выйти</button
+          ><span class="local-badge"><i></i> Локально</span
           ><button id="shutdown" class="quiet" type="button">Закрыть приложение</button>
         </div>
       </header>
       <main>
         <section class="intro">
-          <div class="eyebrow">ДОКУМЕНТЫ, С КОТОРЫМИ МОЖНО РАБОТАТЬ</div>
-          <h1>Из Doc88 — в PDF с поиском</h1>
-          <p>
-            Найди документ или вставь ссылку. Получи PDF, в котором можно<br class="wide-only" />
-            искать, выделять и копировать английский текст.
-          </p>
+          <div class="intro-heading">
+            <span class="catalogue-mark" aria-hidden="true">S / 01</span>
+            <h1>Поиск стандартов</h1>
+          </div>
+          <div class="standards-strip" aria-label="Поддержка">
+            <span class="support-label">Поддержка</span>
+            <span class="publisher-logo asme" title="ASME"
+              ><img src="/logo-asme.svg" alt="ASME"
+            /></span>
+            <span class="publisher-logo" title="BS — BSI"><img src="/logo-bs.svg" alt="BS" /></span>
+            <span class="publisher-logo din-logo" title="DIN"
+              ><img src="/logo-din.png" alt="DIN"
+            /></span>
+            <span class="publisher-logo" title="EN — CEN/CENELEC"
+              ><img src="/logo-en.svg" alt="EN"
+            /></span>
+            <span class="publisher-logo iso-logo" title="ISO"
+              ><img src="/logo-iso.svg" alt="ISO"
+            /></span>
+            <span class="publisher-logo nf-logo" title="NF — AFNOR"
+              ><img src="/logo-nf.webp" alt="NF"
+            /></span>
+          </div>
         </section>
         <div class="workspace">
           <section class="card input-card" aria-labelledby="input-title">
             <div class="card-heading">
               <span class="section-number">01</span>
-              <h2 id="input-title">Добавь документ</h2>
+              <h2 id="input-title">Документ</h2>
+              <button id="clear-workspace" class="quiet clear-workspace" type="button" disabled>
+                Очистить
+              </button>
             </div>
             <div class="tabs" role="tablist" aria-label="Источник документа">
               <button
@@ -44,7 +76,7 @@
                 aria-controls="search-panel"
                 type="button"
               >
-                Найти документ
+                По номеру
               </button>
               <button
                 id="batch-tab"
@@ -58,6 +90,7 @@
               </button>
               <button
                 id="url-tab"
+                hidden
                 role="tab"
                 aria-selected="false"
                 aria-controls="url-panel"
@@ -68,17 +101,18 @@
               </button>
               <button
                 id="zip-tab"
+                hidden
                 role="tab"
                 aria-selected="false"
                 aria-controls="zip-panel"
                 tabindex="-1"
                 type="button"
               >
-                Готовый ZIP
+                Из архива
               </button>
             </div>
             <form id="search-panel" role="tabpanel" aria-labelledby="search-tab">
-              <label for="search-query">Название или обозначение документа</label>
+              <label for="search-query">Обозначение документа</label>
               <input
                 id="search-query"
                 type="text"
@@ -88,24 +122,9 @@
                 autocomplete="off"
                 required
               />
-              <p class="helper">
-                Можно писать «iso 5458 2013» или «iso 5458-2013» — оформим как ISO 5458:2013. Без
-                года уточним действующее издание на iso.org.
-              </p>
-              <div class="search-explainer">
-                <p><strong>Английский текст</strong>Проверим содержимое, а не только название.</p>
-                <p>
-                  <strong>Проверка страниц</strong>Для ISO сверим объём с каталогом издателя и
-                  сохраним все страницы, заявленные Doc88.
-                </p>
-              </div>
               <button id="start-search" class="primary" type="submit">
-                Найти и проверить <span aria-hidden="true">⌕</span>
+                Найти документ <span aria-hidden="true">⌕</span>
               </button>
-              <div class="helper">
-                Проверим до трёх вариантов и сразу подготовим PDF подходящего документа. Если Doc88
-                попросит подтверждение, капча появится рядом в программе.
-              </div>
             </form>
             <form id="batch-panel" role="tabpanel" aria-labelledby="batch-tab" hidden>
               <label for="batch-queries">Документы — каждый с новой строки</label>
@@ -116,24 +135,19 @@
                 required
                 placeholder="iso 5458 2018&#10;iso 129-1 2004&#10;ISO 17450-3"
               ></textarea>
-              <p class="helper">
-                До 30 документов. Повторы уберём, обозначения оформим автоматически.
-              </p>
+              <p class="helper">До 30 документов.</p>
               <button id="start-batch" class="primary" type="submit">
                 Добавить в очередь <span aria-hidden="true">＋</span>
               </button>
-              <p class="helper">
-                Готовые PDF можно скачать одним архивом. Запросы, которым нужен выбор издания, будут
-                ждать тебя; остальные продолжат обработку.
-              </p>
+              <p class="helper">Готовые PDF можно скачать одним архивом.</p>
             </form>
             <form id="url-panel" role="tabpanel" aria-labelledby="url-tab" hidden>
-              <label for="document-url">Ссылка на документ Doc88</label>
+              <label for="document-url">Ссылка на документ</label>
               <input
                 id="document-url"
                 name="url"
                 type="url"
-                placeholder="https://www.doc88.com/p-…html"
+                placeholder="Вставь ссылку на документ"
                 autocomplete="off"
                 required
               />
@@ -167,51 +181,177 @@
                 ><input id="archive-file" type="file" accept=".zip,application/zip"
               /></label>
               <div class="helper">
-                Подойдёт архив от оригинального doc88-downloader. Страницы будут отсортированы по
-                номерам файлов.
+                Подойдёт ZIP со страницами в JPG или PNG. Расположим их по номерам файлов.
               </div>
               <button id="start-zip" class="primary" type="submit">
                 Распознать и создать PDF <span aria-hidden="true">↗</span>
               </button>
             </form>
             <p id="form-error" class="error-text" role="alert" hidden></p>
-            <label class="quality-option"
+            <label class="quality-option" data-dev
               ><input id="enhance-images" type="checkbox" checked /><span
-                >Увеличивать мелкие и размытые страницы перед OCR</span
+                >Улучшение изображений</span
               ></label
             >
             <div class="input-footer">
-              <span>Язык OCR</span><strong>English</strong><span class="footer-dot">·</span
-              ><span id="engine-status">Проверяем готовность…</span>
+              <span id="document-language-summary">Язык документа: автоматически</span>
+              <span data-dev class="language-dev-control">
+                <label for="ocr-language">Язык OCR</label
+                ><select id="ocr-language">
+                  <option value="auto">Автоматически</option>
+                  <option value="eng">Английский</option>
+                  <option value="deu">Немецкий</option>
+                  <option value="fra">Французский</option>
+                  <option value="eng+deu">Английский / Немецкий</option>
+                  <option value="eng+fra">Английский / Французский</option>
+                  <option value="eng+deu+fra">Английский / Немецкий / Французский</option>
+                  <option value="rus">Русский</option>
+                </select></span
+              ><span id="engine-status" data-dev>Проверяем готовность…</span>
             </div>
+            <div class="processing-setting" data-dev>
+              <label for="source-policy">Источники документов</label>
+              <select id="source-policy">
+                <option value="doc88-first">Все — сначала Doc88</option>
+                <option value="anna-first">Все — сначала Anna’s Archive</option>
+                <option value="doc88-only">Только Doc88</option>
+                <option value="anna-only">Только Anna’s Archive</option>
+              </select>
+            </div>
+            <div class="processing-setting" data-dev>
+              <label for="processing-mode">Способ обработки</label>
+              <select id="processing-mode">
+                <option value="auto">Автоматически</option>
+                <option value="direct">Прямое извлечение</option>
+                <option value="ocr">Изображения + OCR</option>
+              </select>
+              <p id="processing-note" class="helper">
+                Автоматический режим использует OCR, если прямое извлечение недоступно.
+              </p>
+            </div>
+            <details id="captcha-settings" class="processing-setting" data-dev>
+              <summary>RuCaptcha · подтверждение доступа</summary>
+              <form id="captcha-form">
+                <label class="captcha-toggle"
+                  ><input id="captcha-enabled" type="checkbox" /> Автоматическое решение капч</label
+                >
+                <label for="captcha-key">Ключ API RuCaptcha</label>
+                <input
+                  id="captcha-key"
+                  type="password"
+                  autocomplete="off"
+                  maxlength="32"
+                  placeholder="Новый ключ (необязательно)"
+                />
+                <p id="captcha-key-status" class="helper">Ключ не указан</p>
+                <div class="captcha-limits">
+                  <div>
+                    <label for="captcha-job-limit">Попыток на документ</label
+                    ><input
+                      id="captcha-job-limit"
+                      type="number"
+                      min="0"
+                      max="5"
+                      value="0"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label for="captcha-day-limit">Попыток в день (UTC)</label
+                    ><input
+                      id="captcha-day-limit"
+                      type="number"
+                      min="0"
+                      max="50"
+                      value="0"
+                      required
+                    />
+                  </div>
+                </div>
+                <p class="helper">
+                  <span>Баланс:</span> <b id="captcha-balance">—</b> ·
+                  <span>Попыток сегодня (UTC):</span> <b id="captcha-usage">0 / 10</b>
+                </p>
+                <div class="captcha-actions">
+                  <button class="secondary" id="captcha-save" type="submit">
+                    Сохранить настройки
+                  </button>
+                  <button class="secondary" id="captcha-check" type="button">
+                    Проверить баланс
+                  </button>
+                  <button class="quiet" id="captcha-remove" type="button">Удалить ключ</button>
+                </div>
+                <p class="helper">
+                  Текстовая капча DDoS-Guard и пазл Doc88. При неудаче доступно ручное
+                  подтверждение. Ключ хранится только в локальных настройках.
+                </p>
+                <p class="helper">
+                  Режим «100% распознавание» настраивается в кабинете RuCaptcha. Лимиты здесь
+                  ограничивают отправки, а не число работников сервиса. Ноль — без ограничений.
+                </p>
+                <p id="captcha-error" class="error-text" role="alert" hidden></p>
+              </form>
+            </details>
+            <details id="anna-experiment" class="processing-setting" data-dev>
+              <summary>Эксперимент: поиск готового PDF</summary>
+              <form id="anna-form">
+                <label for="anna-query">Обозначение документа</label>
+                <input
+                  id="anna-query"
+                  type="text"
+                  maxlength="180"
+                  placeholder="ISO 129-1"
+                  required
+                />
+                <details id="anna-manual">
+                  <summary>Указать карточку вручную</summary>
+                  <label for="anna-card">Карточка Anna’s Archive (необязательно)</label>
+                  <input id="anna-card" type="url" placeholder="https://annas-archive.pk/md5/…" />
+                  <label for="anna-slow">Страница скачивания (необязательно)</label>
+                  <input
+                    id="anna-slow"
+                    type="url"
+                    placeholder="https://annas-archive.pk/slow_download/…"
+                  />
+                </details>
+                <button id="anna-submit" class="secondary" type="submit">Найти готовый PDF</button>
+                <p id="anna-error" class="error-text" role="alert" hidden></p>
+              </form>
+            </details>
           </section>
-          <section class="card status-card" aria-labelledby="status-title">
+          <section
+            id="result-section"
+            class="card status-card"
+            aria-labelledby="status-title"
+            hidden
+          >
             <div class="card-heading">
               <span class="section-number">02</span>
-              <h2 id="status-title">Твой PDF</h2>
+              <h2 id="status-title">Результат</h2>
               <span id="status-pill" class="status-pill">Ожидание</span>
             </div>
             <div id="empty-state" class="empty-state">
               <div class="document-art" aria-hidden="true">
                 <span></span><span></span><span></span><b>PDF</b><i>⌕</i>
               </div>
-              <h3>Здесь появится результат</h3>
-              <p>Вид страниц сохранится.<br />Распознанный текст станет доступен для поиска.</p>
+              <h3>Документ не выбран</h3>
+              <p>Укажите обозначение для поиска.</p>
             </div>
             <div id="job-state" hidden>
               <h3 id="job-title"></h3>
-              <p id="naming-warning" class="helper" role="status" hidden></p>
+              <p id="naming-warning" data-dev class="helper" role="status" hidden></p>
+              <p id="processing-result" data-dev class="helper" hidden></p>
               <div id="iso-edition" class="iso-edition" hidden>
                 <span id="iso-edition-label">Действующее издание по ISO</span>
                 <a id="iso-edition-link" target="_blank" rel="noopener"></a>
-                <span id="iso-edition-date"></span>
-                <span id="iso-page-count"></span>
+                <span id="iso-edition-date" data-dev></span>
+                <span id="iso-page-count" data-dev></span>
                 <div id="iso-supplements" class="iso-supplements" hidden></div>
               </div>
               <div class="steps" aria-label="Этапы обработки">
-                <div data-step="download"><span>1</span>Архив страниц</div>
-                <div data-step="ocr"><span>2</span>Распознавание</div>
-                <div data-step="done"><span>3</span>Готовый PDF</div>
+                <div data-step="edition"><span>1</span>Уточняем издание</div>
+                <div data-step="verification"><span>2</span>Проверяем документ</div>
+                <div data-step="pdf"><span>3</span>Готовим PDF</div>
               </div>
               <p id="job-message" role="status" aria-live="polite"></p>
               <div
@@ -225,11 +365,28 @@
                 <div id="progress-fill"></div>
               </div>
               <div id="job-meta" class="job-meta"></div>
+              <details id="performance-panel" data-dev class="performance-panel" hidden>
+                <summary>Время обработки</summary>
+                <p id="performance-total" class="helper"></p>
+                <div class="performance-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Этап</th>
+                        <th>Время</th>
+                        <th>Вызовы</th>
+                      </tr>
+                    </thead>
+                    <tbody id="performance-stages"></tbody>
+                  </table>
+                </div>
+                <p id="performance-parallel" class="helper"></p>
+                <p class="helper">
+                  Параллельные этапы могут пересекаться, поэтому их время не складывается в общее.
+                </p>
+              </details>
               <div id="manual-note" class="manual-note" hidden>
-                <strong>Нужно твоё действие</strong
-                ><span
-                  >Выполни подтверждение в панели Doc88 рядом. Обработка продолжится сама.</span
-                >
+                <strong>Подтверждение доступа</strong><span>Пройдите проверку в панели ниже.</span>
               </div>
               <div id="result-actions" class="result-actions" hidden>
                 <a id="pdf-download" class="primary" href="#"
@@ -237,30 +394,49 @@
                 ><a id="pdf-preview" class="text-link" href="#" target="_blank" rel="noopener"
                   >Открыть PDF ↗</a
                 >
+                <button id="show-copy-text" class="text-link quiet" type="button" hidden>
+                  Текст документа
+                </button>
               </div>
-              <a id="zip-download" class="text-link archive-link" href="#" hidden
-                >Скачать исходный ZIP</a
-              >
-              <a
-                id="source-document"
-                class="text-link archive-link"
-                href="#"
-                target="_blank"
-                rel="noopener"
+              <form id="document-review" class="document-review" hidden>
+                <fieldset>
+                  <legend>Документ подходит?</legend>
+                  <label><input type="radio" name="review-rating" value="good" /> ✓ Да</label>
+                  <label
+                    ><input type="radio" name="review-rating" value="bad" /> ✕ Есть проблема</label
+                  >
+                </fieldset>
+                <label for="review-comment">Комментарий к документу</label>
+                <textarea
+                  id="review-comment"
+                  rows="3"
+                  maxlength="4000"
+                  placeholder="Что нужно исправить? Можно указать страницу."
+                ></textarea>
+                <button id="review-save" class="secondary" type="submit">Сохранить оценку</button>
+                <p id="review-status" class="helper" role="status"></p>
+              </form>
+              <section
+                id="quality-notes"
+                class="quality-notes"
+                aria-label="Замечания к PDF"
                 hidden
-                >Открыть найденный документ на Doc88 ↗</a
+              ></section>
+              <a id="zip-download" data-dev class="text-link archive-link" href="#" hidden
+                >Скачать исходный ZIP</a
               >
               <button id="cancel" class="secondary" type="button" hidden>
                 Остановить обработку
               </button>
               <button id="resume" class="primary resume-button" type="button" hidden>
-                Продолжить с сохранённого места
+                Продолжить
               </button>
-              <p id="resume-note" class="helper" hidden></p>
-              <p id="integrity-note" class="integrity-note" role="status" hidden></p>
-              <p id="language-note" class="integrity-note" role="status" hidden></p>
-              <p id="enhancement-note" class="helper" hidden></p>
-              <p id="blank-note" class="helper" hidden></p>
+              <div id="problem-actions" class="problem-actions" hidden></div>
+              <p id="resume-note" data-dev class="helper" hidden></p>
+              <p id="integrity-note" data-dev class="integrity-note" role="status" hidden></p>
+              <p id="language-note" data-dev class="integrity-note" role="status" hidden></p>
+              <p id="enhancement-note" data-dev class="helper" hidden></p>
+              <p id="blank-note" data-dev class="helper" hidden></p>
             </div>
           </section>
           <aside
@@ -271,16 +447,13 @@
           >
             <div class="card-heading">
               <span class="section-number">03</span>
-              <h2 id="challenge-title">Проверка Doc88</h2>
+              <h2 id="challenge-title">Подтверждение доступа</h2>
             </div>
-            <p class="challenge-intro">
-              Передвинь ползунок на изображении ниже — так же, как на сайте. На сенсорном экране
-              можно пальцем.
-            </p>
+            <p class="challenge-intro">Выполните проверку на изображении ниже.</p>
             <div id="challenge-screen" class="challenge-screen" aria-busy="true">
               <img
                 id="challenge-image"
-                alt="Проверка Doc88: передвинь ползунок мышью или пальцем"
+                alt="Подтверждение доступа: передвинь ползунок мышью или пальцем"
                 draggable="false"
                 hidden
               />
@@ -292,6 +465,15 @@
             <button id="challenge-refresh" class="secondary" type="button">
               Обновить изображение
             </button>
+            <button id="challenge-expand" class="secondary" type="button" aria-expanded="false">
+              Увеличить проверку
+            </button>
+            <form id="challenge-keyboard" hidden>
+              <label for="challenge-answer">Ответ на проверку, если нужен ввод текста</label>
+              <input id="challenge-answer" type="text" maxlength="64" autocomplete="off" />
+              <button class="secondary" type="submit">Ввести ответ</button>
+              <button id="challenge-enter" class="secondary" type="button">Нажать Enter</button>
+            </form>
           </aside>
         </div>
         <section
@@ -300,12 +482,12 @@
           aria-label="Структура и нормативные ссылки"
           hidden
         >
-          <details class="insight-card" open>
+          <details id="structure-panel" class="insight-card" open hidden>
             <summary>Структура документа <span id="structure-count"></span></summary>
             <p id="structure-message" class="helper"></p>
             <div id="structure-tree"></div>
           </details>
-          <details class="insight-card" open>
+          <details id="references-panel" class="insight-card" open hidden>
             <summary>Нормативные ссылки</summary>
             <p id="references-message" class="helper"></p>
             <div id="references-list"></div>
@@ -317,15 +499,32 @@
             </p>
           </details>
         </section>
+        <details id="document-cache" class="cache-panel" data-dev>
+          <summary>Кеш стандартов и dev-лог</summary>
+          <div class="cache-toolbar">
+            <div class="cache-search">
+              <label for="cache-filter">Найти в кеше</label
+              ><input id="cache-filter" type="search" placeholder="Обозначение или название" />
+            </div>
+            <button id="cache-refresh" class="secondary" type="button">Обновить кеш</button>
+            <p id="cache-summary" class="helper" role="status"></p>
+          </div>
+          <div id="cache-items" role="region" aria-label="Кеш стандартов" tabindex="0"></div>
+          <details>
+            <summary>Журнал оценок</summary>
+            <div id="review-log"></div>
+          </details>
+        </details>
         <section id="batch-section" class="batch-section" aria-labelledby="batch-title" hidden>
           <div class="history-heading">
             <h2 id="batch-title">Очередь документов</h2>
-            <span>Обрабатываем по одному</span>
+            <button id="clear-queue" class="quiet" type="button" disabled>Очистить</button>
           </div>
           <div id="batch-list"></div>
         </section>
         <section
           id="search-results-section"
+          data-dev
           class="search-results"
           aria-labelledby="search-results-title"
           hidden
@@ -335,42 +534,92 @@
             <span id="search-summary" role="status"></span>
           </div>
           <p class="helper">
-            «Страницы Doc88» — все заявленные страницы сохранены. «Объём ISO» — страниц не меньше,
-            чем в каталоге издателя; обложка и вводные страницы учитываются отдельно от этого
-            минимума. Язык проверяется по основному тексту: сомнение показывается заметкой, явно
-            другой язык отклоняет вариант.
+            «Все страницы» — каждый заявленный лист сохранён. «Объём ISO» — страниц не меньше, чем в
+            каталоге издателя; обложка и вводные страницы учитываются отдельно от этого минимума.
+            Язык проверяется по основному тексту: сомнение показывается заметкой, явно другой язык
+            отклоняет вариант.
           </p>
           <div id="search-results-list" aria-live="polite"></div>
         </section>
-        <section id="history-section" class="history" hidden>
+        <section id="history-section" data-dev class="history" hidden>
           <div class="history-heading">
             <h2>Последние документы</h2>
             <span>Результаты сохраняются между запусками</span>
           </div>
           <div id="history-list"></div>
         </section>
-        <div class="how-it-works">
-          <div>
-            <span>↗</span>
-            <p>
-              <strong>Капча прямо в программе</strong>Если потребуется подтверждение, оно появится
-              рядом с результатом.
-            </p>
-          </div>
-          <div>
-            <span>⌕</span>
-            <p><strong>Распознавание на компьютере</strong>Изображения обрабатываются локально.</p>
-          </div>
-          <div>
-            <span>↓</span>
-            <p>
-              <strong>PDF и оригинальный архив</strong>Оба файла можно сохранить после обработки.
-            </p>
-          </div>
-        </div>
       </main>
-      <footer>Doc88 PDF <span>·</span> Локальная мастерская документов</footer>
+      <footer>DecliPDF <span>·</span> Поиск стандартов</footer>
     </div>
+    <dialog
+      id="series-dialog"
+      class="edition-dialog series-dialog"
+      aria-labelledby="series-heading"
+    >
+      <form id="series-form">
+        <span class="eyebrow">Серия стандартов</span>
+        <h2 id="series-heading">Выберите документы</h2>
+        <p id="series-reference"></p>
+        <div class="series-toolbar">
+          <button id="series-all" class="secondary" type="button">Выбрать все</button
+          ><button id="series-none" class="quiet" type="button">Снять выбор</button
+          ><span id="series-count"></span>
+        </div>
+        <div id="series-options" class="edition-options"></div>
+        <p id="series-error" class="error-text" role="alert" hidden></p>
+        <div class="edition-actions">
+          <button id="series-cancel" class="secondary" type="button">Отменить поиск</button
+          ><button id="series-submit" class="primary" type="submit" disabled>
+            Найти выбранные документы
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="language-dialog" class="edition-dialog" aria-labelledby="language-heading">
+      <form id="language-form">
+        <h2 id="language-heading">Язык документа</h2>
+        <p id="language-reference" class="edition-description"></p>
+        <p id="language-question">На каком языке искать документ?</p>
+        <div id="language-toolbar" class="series-toolbar">
+          <button id="language-all" class="secondary" type="button">Выбрать все</button>
+          <button id="language-none" class="quiet" type="button">Снять выбор</button>
+        </div>
+        <div id="language-options" class="edition-options"></div>
+        <p id="language-error" class="error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button id="language-cancel" class="secondary" type="button">Отмена</button>
+          <button id="language-submit" class="primary" type="submit" disabled>Продолжить</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="copy-dialog" class="edition-dialog copy-dialog" aria-labelledby="copy-heading">
+      <h2 id="copy-heading">Текст документа</h2>
+      <textarea id="copy-content" readonly rows="16" aria-label="Текст для копирования"></textarea>
+      <p id="copy-message" class="helper" role="status"></p>
+      <div class="edition-actions">
+        <button id="copy-close" class="secondary" type="button">Закрыть</button
+        ><button id="copy-button" class="primary" type="button">Скопировать текст</button>
+      </div>
+    </dialog>
+    <dialog id="dev-dialog" class="edition-dialog dev-dialog" aria-labelledby="dev-heading">
+      <form id="dev-form">
+        <span class="eyebrow">DecliPDF / Dev</span>
+        <h2 id="dev-heading">Режим разработчика</h2>
+        <label for="dev-password">Пароль</label
+        ><input
+          id="dev-password"
+          type="password"
+          maxlength="256"
+          autocomplete="current-password"
+          required
+        />
+        <p id="dev-error" class="error-text" role="alert" hidden></p>
+        <div class="edition-actions">
+          <button id="dev-close" class="secondary" type="button">Отмена</button
+          ><button id="dev-submit" class="primary" type="submit">Войти</button>
+        </div>
+      </form>
+    </dialog>
     <dialog
       id="edition-dialog"
       class="edition-dialog"
@@ -378,8 +627,8 @@
       aria-describedby="edition-description"
     >
       <form id="edition-form">
-        <span class="eyebrow">История стандарта на ISO</span>
-        <h2 id="edition-heading">Выбери издание</h2>
+        <span class="eyebrow">Издания стандарта</span>
+        <h2 id="edition-heading">Выберите издание</h2>
         <p id="edition-description"></p>
         <div
           id="edition-options"
@@ -387,9 +636,7 @@
           role="group"
           aria-label="Издания и прежние обозначения"
         ></div>
-        <p class="helper">
-          Отозванные издания и документы с прежними обозначениями можно искать как архивные.
-        </p>
+        <p class="helper">Выберите нужное издание, чтобы продолжить.</p>
         <p id="edition-error" class="error-text" role="alert" hidden></p>
         <div class="edition-actions">
           <button id="edition-cancel" class="secondary" type="button">Отменить поиск</button>

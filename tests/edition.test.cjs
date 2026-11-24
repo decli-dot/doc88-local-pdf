@@ -63,11 +63,13 @@ test('edition API restores pending choices, accepts only saved choices, serializ
       ],
     }),
   );
-  // Isolate server requests from the real catalogue and Doc88 in this API test.
+  // Isolate this API test from the real catalogue and both search providers.
   const preload = path.join(directory, 'fetch-fixture.cjs');
   await fs.writeFile(
     preload,
-    `global.fetch = async url => {
+    `const sourceModule=${JSON.stringify(path.join(__dirname, '../pdf-sources.cjs'))};const sources=require(sourceModule);require.cache[sourceModule].exports={...sources,searchPDFSources:async()=>[]};
+    const annaModule=${JSON.stringify(path.join(__dirname, '../experimental/anna-search.cjs'))};const anna=require(annaModule);require.cache[annaModule].exports={...anna,searchAnnaPages:async function*(){}};
+    global.fetch = async url => {
     const query = new URL(url).searchParams.get('q');
     require('node:fs').writeFileSync(require('node:path').join(process.env.DOC88_DATA_DIR, 'query.json'), JSON.stringify(query));
     return new Response('<div id="pageResult"></div>');
@@ -80,7 +82,12 @@ test('edition API restores pending choices, accepts only saved choices, serializ
     {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, DOC88_PORT: '18969', DOC88_DATA_DIR: directory },
+      env: {
+        ...process.env,
+        DOC88_PORT: '18969',
+        DOC88_DATA_DIR: directory,
+        DECLIPDF_DEV_PASSWORD: 'fixture-password',
+      },
     },
   );
   t.after(async () => {
@@ -101,6 +108,13 @@ test('edition API restores pending choices, accepts only saved choices, serializ
     });
     child.on('error', reject);
   });
+  const login = await fetch(origin + '/api/dev/login', {
+    method: 'POST',
+    headers: { Origin: origin, 'x-doc88-request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'fixture-password' }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie').split(';')[0];
   const post = (id, action, input, requestOrigin = origin) =>
     fetch(`${origin}/api/jobs/${id}/${action}`, {
       method: 'POST',
@@ -135,17 +149,27 @@ test('edition API restores pending choices, accepts only saved choices, serializ
   assert.equal(job.stage, 'error');
   assert.equal(job.query, 'ISO 129-1:2015');
   assert.equal(job.resolvedQuery, 'ISO 129:1985');
-  assert.equal(job.isoEdition.sourceURL, editions[1].sourceURL);
+  assert.equal(job.isoEdition, undefined);
+  const diagnostic = await (
+    await fetch(`${origin}/api/jobs/${ids[0]}`, { headers: { cookie } })
+  ).json();
+  assert.equal(diagnostic.isoEdition.sourceURL, editions[1].sourceURL);
+  assert.deepEqual(
+    diagnostic.sourceAttempts.map((attempt) => attempt.provider),
+    ['doc88', 'anna'],
+  );
   assert.equal(
-    JSON.parse(await fs.readFile(path.join(directory, 'query.json'), 'utf8')),
-    'ISO 129 1985',
+    require('../dist/query.js').normalizeQuery(
+      JSON.parse(await fs.readFile(path.join(directory, 'query.json'), 'utf8')),
+    ),
+    'ISO 129',
   );
   assert.equal((await post(ids[1], 'cancel', {})).status, 200);
   assert.equal((await (await fetch(`${origin}/api/jobs/${ids[1]}`)).json()).stage, 'cancelled');
   assert.equal((await post(ids[1], 'edition', { reference: editions[0].reference })).status, 409);
   const recheck = await fetch(origin + '/api/search', {
     method: 'POST',
-    headers: { Origin: origin, 'x-doc88-request': '1', 'Content-Type': 'application/json' },
+    headers: { Origin: origin, 'x-doc88-request': '1', 'Content-Type': 'application/json', cookie },
     body: JSON.stringify({
       query: 'iso 5458-2013',
       sourceJobId: legacyId,

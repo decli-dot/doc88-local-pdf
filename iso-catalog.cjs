@@ -86,10 +86,14 @@ function officialFullTitle(edition) {
   return edition.reference + (title ? ' — ' + title : '');
 }
 function officialPDFName(edition) {
-  const wanted = reference(edition?.reference);
+  const other = require('./dist/standard-reference.js').parse(edition?.reference);
+  const wanted = other || reference(edition?.reference);
   if (!wanted?.year) throw new Error('Нужно обозначение ISO с годом для имени PDF.');
   const name = (
-    formatReference(wanted).replace(/:(\d{4})/g, ' $1') +
+    (other
+      ? require('./dist/standard-reference.js').format(other)
+      : formatReference(wanted)
+    ).replace(/:(\d{4})/g, ' $1') +
     ' ' +
     normalizeOfficialTitle(edition.title)
   )
@@ -254,7 +258,14 @@ async function collectISOHistory(seeds, wanted, readRecord, signal) {
 }
 async function resolveISOStandard(
   wanted,
-  { signal, dataDirectory, launchContext, onProgress } = {},
+  {
+    signal,
+    dataDirectory,
+    launchContext,
+    onProgress,
+    detectSeries = false,
+    chooseEdition = false,
+  } = {},
 ) {
   if (!wanted) throw new Error('Нужно обозначение ISO.');
   signal?.throwIfAborted();
@@ -305,6 +316,59 @@ async function resolveISOStandard(
         };
       }),
     );
+    if (detectSeries && !wanted.part && !wanted.year) {
+      // Read every catalogue result page before offering "select all". A partial
+      // page must never be advertised as the full series.
+      const pageKeys = new Set([JSON.stringify(hits)]);
+      for (let count = 0; count < 30; count++) {
+        const next = await page
+          .locator(
+            '.pagination .page-item:not(.disabled) a[aria-label="Next"], .pagination a[rel="next"], .pagination li:not(.disabled) a[title="Next"]',
+          )
+          .first();
+        if (!(await next.count())) break;
+        const previous = await page.locator('#search-results').innerText();
+        await next.click();
+        await page.waitForFunction(
+          (before) => document.querySelector('#search-results')?.innerText !== before,
+          previous,
+          { timeout: 20000 },
+        );
+        const more = await page.evaluate(() =>
+          [...document.querySelectorAll('#search-results .card')].map((card) => {
+            const link = card.querySelector('.card-title a');
+            return {
+              reference: link?.innerText.trim() || '',
+              url: link?.href || '',
+              status: card.querySelector('.card-footer')?.innerText.trim() || '',
+              title: (card.querySelector('.card-title')?.innerText || '')
+                .replace(link?.innerText.trim() || '', '')
+                .trim(),
+            };
+          }),
+        );
+        const key = JSON.stringify(more);
+        if (pageKeys.has(key)) throw Error('Catalogue pagination did not advance.');
+        pageKeys.add(key);
+        hits.push(...more);
+        if (count === 29) throw Error('Series exceeds catalogue result limit.');
+      }
+      const stats = await page
+        .locator('#stats-container')
+        .innerText()
+        .catch(() => '');
+      const announced = Number(stats.replace(/[,\u00a0]/g, '').match(/(\d+)\s+results?\b/i)?.[1]);
+      if (announced > hits.length) throw Error('Не удалось получить все страницы каталога серии.');
+      const items = seriesEditions(hits, wanted);
+      if (items.length)
+        return {
+          series: true,
+          reference: formatReference(wanted),
+          items,
+          checkedAt: new Date().toISOString(),
+          sourceURL: url,
+        };
+    }
     signal?.throwIfAborted();
     const checkedAt = new Date().toISOString();
     const readRecord = async (seed) => {
@@ -377,6 +441,23 @@ async function resolveISOStandard(
       };
     };
     let current = chooseISOEdition(hits, wanted);
+    if (chooseEdition && !wanted.year) {
+      const seeds = hits
+        .map(historyEdition)
+        .filter(
+          (edition) =>
+            edition && sameReference({ ...wanted, year: null }, reference(edition.reference)),
+        );
+      if (current) seeds.unshift(current);
+      const history = await collectISOHistory(seeds, wanted, readRecord, signal);
+      if (!history.editions.length) throw Error('Не удалось получить список изданий ISO.');
+      return {
+        choice: true,
+        reference: formatReference(wanted),
+        editions: history.editions,
+        incomplete: history.incomplete,
+      };
+    }
     if (!current && wanted.supplement) {
       const baseWanted = { ...wanted, supplement: undefined };
       const base = chooseISOEdition(hits, baseWanted);
@@ -444,6 +525,32 @@ async function resolveISOStandard(
     await context.close().catch(() => {});
   }
 }
+function seriesEditions(hits, wanted) {
+  const parts = new Map();
+  for (const hit of hits) {
+    const found = reference(hit.reference);
+    if (
+      !found?.part ||
+      found.supplement ||
+      found.organization !== wanted.organization ||
+      found.number !== wanted.number ||
+      !internationalISOName(hit.reference)
+    )
+      continue;
+    const edition = chooseISOEdition([hit], found);
+    if (!edition) continue;
+    const previous = parts.get(found.part);
+    if (
+      !previous ||
+      Number(edition.status === 'Published') > Number(previous.status === 'Published') ||
+      (edition.status === previous.status && edition.year > previous.year)
+    )
+      parts.set(found.part, edition);
+  }
+  return [...parts.values()].sort((a, b) =>
+    reference(a.reference).part.localeCompare(reference(b.reference).part, 'en', { numeric: true }),
+  );
+}
 async function resolveLatestISO(wanted, options) {
   if (!wanted || wanted.year) throw new Error('Для уточнения ISO нужно обозначение без года.');
   return resolveISOStandard(wanted, options);
@@ -466,4 +573,5 @@ module.exports = {
   ISOEditionNotFoundError,
   collectISOHistory,
   catalogueSupplements,
+  seriesEditions,
 };

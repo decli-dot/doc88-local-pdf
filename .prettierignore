@@ -4,6 +4,7 @@ node_modules/
 qa/
 release/
 vendor/
+dist/logo-*
 package-lock.json
 tests/fixtures/
 *.cmd

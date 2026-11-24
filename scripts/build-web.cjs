@@ -22,7 +22,23 @@ async function copy(source, destination) {
   await fs.rm(output, { recursive: true, force: true });
   await fs.mkdir(output, { recursive: true });
   await copy('web/ocr.js', 'ocr.js');
-  for (const name of ['app.js', 'query.js', 'challenge.js', 'style.css'])
+  for (const name of [
+    'app.js',
+    'query.js',
+    'product.js',
+    'i18n.js',
+    'ocr-language.js',
+    'job-feedback.js',
+    'standard-reference.js',
+    'challenge.js',
+    'style.css',
+    'logo-asme.svg',
+    'logo-bs.svg',
+    'logo-din.png',
+    'logo-en.svg',
+    'logo-iso.svg',
+    'logo-nf.webp',
+  ])
     await copy('dist/' + name, name);
   const esbuild = require('esbuild');
   const aliases = {
@@ -54,6 +70,13 @@ async function copy(source, destination) {
                 })(),
             ),
           }));
+          build.onResolve(
+            {
+              filter:
+                /(?:^|\/)(?:publisher-catalog|pdf-sources|pdf-input|document-engine|preview-document|shared-cache)\.cjs$/,
+            },
+            () => ({ path: path.join(root, 'web/local-services.js') }),
+          );
           build.onResolve({ filter: /(?:^|\/)runtime\.cjs$/ }, () => ({
             path: path.join(root, 'web/browser-runtime.js'),
           }));
@@ -68,8 +91,8 @@ async function copy(source, destination) {
   html = html
     .replace(/(src|href)="\//g, '$1="')
     .replace(
-      '<title>Doc88 PDF · локальное приложение</title>',
-      '<title>Doc88 PDF · поиск ISO и OCR в браузере</title>',
+      '<title>DecliPDF · Поиск стандартов</title>',
+      '<title>DecliPDF · поиск ISO и OCR в браузере</title>',
     )
     .replace(
       '<script defer src="challenge.js"></script>',
@@ -143,26 +166,38 @@ async function copy(source, destination) {
       `assets/licenses/${dependency.replaceAll('/', '-')}.txt`,
     );
   }
-  let model;
-  const cache =
-    process.env.DOC88_WEB_MODEL || path.join(root, '.data', 'web-assets', 'eng.traineddata.gz');
-  try {
-    model = await fs.readFile(cache);
-  } catch {
-    /* Download a pinned model on a clean checkout. */
-  }
-  if (!model || sha(model) !== modelSHA) {
-    const response = await fetch(modelURL, { signal: AbortSignal.timeout(60000) });
-    if (!response.ok) throw new Error('English model download failed: HTTP ' + response.status);
-    model = Buffer.from(await response.arrayBuffer());
-    if (sha(model) !== modelSHA) throw new Error('English OCR model checksum does not match.');
-    if (!process.env.DOC88_WEB_MODEL) {
+  const models = {
+    eng: modelSHA,
+    deu: '306c4280d0cbed46fbff727486bd43b92730181bae80f56941a091f363bdf28b',
+    rus: 'f51f5edc992249ff9b70a227b22f242dfa47b2b1bbc7ae0ea74908640c101f6a',
+    fra: 'd611139672b3752c7097e671e4a1d9209dfd37f2aeb081ef6487fba3351e9255',
+  };
+  await fs.mkdir(path.join(output, 'assets/lang'), { recursive: true });
+  for (const [language, expected] of Object.entries(models)) {
+    const cache =
+      (language === 'eng' && process.env.DOC88_WEB_MODEL) ||
+      path.join(root, '.data/web-assets', language + '.traineddata.gz');
+    let model;
+    try {
+      model = await fs.readFile(cache);
+    } catch {
+      /* Download a verified model on a clean checkout. */
+    }
+    if (!model || sha(model) !== expected) {
+      const response = await fetch(
+        modelURL
+          .replaceAll('/eng/', '/' + language + '/')
+          .replace('/eng.traineddata', '/' + language + '.traineddata'),
+        { signal: AbortSignal.timeout(60000) },
+      );
+      if (!response.ok) throw Error(language + ' model download failed: HTTP ' + response.status);
+      model = Buffer.from(await response.arrayBuffer());
+      if (sha(model) !== expected) throw Error(language + ' OCR model checksum does not match.');
       await fs.mkdir(path.dirname(cache), { recursive: true });
       await fs.writeFile(cache, model);
     }
+    await fs.writeFile(path.join(output, 'assets/lang', language + '.traineddata.gz'), model);
   }
-  await fs.mkdir(path.join(output, 'assets/lang'), { recursive: true });
-  await fs.writeFile(path.join(output, 'assets/lang/eng.traineddata.gz'), model);
   const zip = new JSZip();
   const prefix = 'doc88-browser-extension/';
   for (const name of (await fs.readdir(path.join(root, 'extension'))).sort())

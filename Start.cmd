@@ -1,4 +1,5 @@
 @echo off
+title DecliPDF
 setlocal
 where node >nul 2>&1
 if errorlevel 1 (

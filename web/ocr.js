@@ -94,7 +94,7 @@
     const { PDFDocument } = scope.PDFLib;
     const pdf = await PDFDocument.create();
     pdf.setTitle(title);
-    pdf.setCreator('Doc88 Browser PDF');
+    pdf.setCreator('DecliPDF');
     let worker = null;
     let pageIndex = -1;
     let textChars = 0;

@@ -25,8 +25,10 @@ function inspectPages(texts, hashes = [], expectedPages = null) {
   const duplicates = [];
   const seen = new Map();
   const anchors = [];
+  const uncertainPages = [];
   for (let i = 0; i < texts.length; i++) {
     const number = printedPage(texts[i]);
+    if (!number && (texts[i].match(/\p{L}/gu)?.length || 0) >= 200) uncertainPages.push(i + 1);
     if (number && (!expectedPages || number <= expectedPages))
       anchors.push({ page: i + 1, number, offset: i + 1 - number });
     // Identical blank sheets are legitimate. Only flag byte-identical images
@@ -101,6 +103,6 @@ function inspectPages(texts, hashes = [], expectedPages = null) {
     messages.push(
       'Уверенно подтвердить нумерацию по OCR не удалось. Проверь порядок и полноту страниц вручную; совпадающих непустых изображений не найдено.',
     );
-  return { status, anchors, duplicates, breaks, message: messages.join(' ') };
+  return { status, anchors, duplicates, breaks, uncertainPages, message: messages.join(' ') };
 }
 module.exports = { digest, printedPage, inspectPages };
